@@ -2326,6 +2326,12 @@
     		// 💡 1. 優先載入 localStorage 本機快取，達到極速秒開、完全零白屏
     		loadData();
 
+    		// 🖥️ 一般瀏覽器 (iPhone PWA / Safari) 沒有 App Inventor 原生端會回呼 receiveDataFromAppInventor()，
+    		// 那個回呼才是原本唯一會觸發首次 render() 的地方，所以這裡要自己補上，不然畫面會一直空白
+    		if (typeof window.AppInventor === 'undefined') {
+        		render();
+    		}
+
     		// 🔄 【新增：10秒自動同步存檔】 
     		// 每隔 10 秒鐘，網頁就會自動發動訊號，讓 App 把當前進度存進手機 TinyDB 裡！
     		setInterval(() => {
