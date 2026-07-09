@@ -2330,6 +2330,19 @@
     		// 那個回呼才是原本唯一會觸發首次 render() 的地方，所以這裡要自己補上，不然畫面會一直空白
     		if (typeof window.AppInventor === 'undefined') {
         		render();
+
+        		// 🎵 瀏覽器政策禁止一開啟就自動出聲，改成使用者第一次點畫面時自動開始播放背景音樂 (若音樂開關為開)
+        		let bgmAutoStarted = false;
+        		const startBgmOnFirstTap = () => {
+            		if (bgmAutoStarted) return;
+            		bgmAutoStarted = true;
+            		if (state.bgmEnabled) playWebBgm();
+        		};
+        		document.addEventListener('click', startBgmOnFirstTap, { once: true });
+        		document.addEventListener('touchstart', startBgmOnFirstTap, { once: true });
+        		document.addEventListener('scroll', startBgmOnFirstTap, { once: true, passive: true, capture: true });
+        		const scrollContainer = document.getElementById('app-container');
+        		if (scrollContainer) scrollContainer.addEventListener('scroll', startBgmOnFirstTap, { once: true, passive: true });
     		}
 
     		// 🔄 【新增：10秒自動同步存檔】 
