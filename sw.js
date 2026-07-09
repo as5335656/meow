@@ -5,8 +5,6 @@ const APP_SHELL = [
   './icon-192.png',
   './icon-512.png',
   './apple-touch-icon.png',
-  './shortcut-life.png',
-  './shortcut-food.png',
   './The_Engine_and_the_Purr.mp3',
   './The_Orange_Glow.mp3',
   './My_Little_Orange_Shadow.mp3',
