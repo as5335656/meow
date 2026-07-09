@@ -1,4 +1,4 @@
-const CACHE_NAME = 'meowww-cache-v2';
+const CACHE_NAME = 'meowww-cache-v3';
 const APP_SHELL = [
   './index.html',
   './manifest.json',
@@ -6,6 +6,8 @@ const APP_SHELL = [
   './icon-512.png',
   './apple-touch-icon.png',
   './shortcut-life.png',
+  './shortcut-food.png',
+  './shortcut-shop.png',
   './The_Engine_and_the_Purr.mp3',
   './The_Orange_Glow.mp3',
   './My_Little_Orange_Shadow.mp3',
