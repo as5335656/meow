@@ -45,7 +45,7 @@
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     </style>
 </head>
-<body class="bg-gray-100 text-gray-800 h-screen w-full flex justify-center overflow-hidden">
+<body class="bg-[#D5E3EC] text-gray-800 h-screen w-full flex justify-center overflow-hidden">
 
     <!-- SVG 漸層定義 (供半星評分使用) -->
     <svg width="0" height="0" class="absolute hidden">
@@ -58,7 +58,7 @@
     </svg>
 
     <!-- 模擬手機邊框的容器 -->
-    <div id="app-container" class="w-full max-w-md bg-gray-50 h-full relative overflow-y-auto no-scrollbar shadow-2xl flex flex-col">
+    <div id="app-container" class="w-full max-w-md bg-[#D5E3EC] h-full relative overflow-y-auto no-scrollbar shadow-2xl flex flex-col">
         
         <!-- 主要內容渲染區 -->
         <div id="main-content" class="flex-1 pb-24 overflow-y-auto no-scrollbar"></div>
@@ -1219,11 +1219,11 @@
                             <div class="w-24 h-24 rounded-full bg-blue-50 border-4 border-white shadow-md overflow-hidden">
                                 <img src="${state.petProfile.photoUrl}" class="w-full h-full object-cover" onerror="this.src='https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?q=80&w=400&auto=format&fit=crop'" />
                             </div>
-                            <div class="absolute bottom-0 right-0 p-2 bg-blue-500 text-white rounded-full"><i data-lucide="cat" class="w-4 h-4"></i></div>
+                            <div class="absolute bottom-0 right-0 p-2 bg-white border border-gray-200 text-gray-400 rounded-full shadow-sm"><i data-lucide="paw-print" class="w-4 h-4"></i></div>
                         </div>
                         <div class="flex-1">
                             <h2 class="text-3xl font-bold text-gray-800 tracking-wide">${state.petProfile.name}</h2>
-                            <div class="flex items-center text-blue-500 mt-2 font-semibold bg-blue-50 w-fit px-3 py-1.5 rounded-full text-sm">
+                            <div class="flex items-center text-gray-500 mt-2 font-semibold bg-gray-100 w-fit px-3 py-1.5 rounded-full text-sm">
                                 <i data-lucide="calendar-heart" class="w-4 h-4 mr-1.5"></i> ${calculateAge(state.petProfile.birthday)}
                             </div>
                             <div class="mt-2.5 text-sm text-gray-400 flex items-center px-1">
@@ -1257,10 +1257,10 @@
 
             if(state.homeLayout.reminders) {
                 html += `
-                <div class="bg-white rounded-3xl p-6 shadow-sm border border-blue-50">
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
                     <div class="flex justify-between items-center mb-4">
-                        <h3 class="font-bold text-gray-800 text-lg flex items-center gap-2"><i data-lucide="clock" class="w-5 h-5 text-blue-500"></i> 近期提醒</h3>
-                        <button onclick="App.toggleAddReminder()" class="text-blue-500 text-sm font-semibold bg-blue-50 px-3 py-1.5 rounded-full flex items-center gap-1">
+                        <h3 class="font-bold text-gray-800 text-lg flex items-center gap-2"><i data-lucide="clock" class="w-5 h-5 text-gray-400"></i> 近期提醒</h3>
+                        <button onclick="App.toggleAddReminder()" class="text-gray-500 text-sm font-semibold bg-gray-100 px-3 py-1.5 rounded-full flex items-center gap-1">
                             <i data-lucide="${state.showAddReminder ? 'x' : 'plus'}" class="w-4 h-4"></i> ${state.showAddReminder ? '取消' : '新增'}
                         </button>
                     </div>
@@ -1280,22 +1280,22 @@
                           remindersList.map(rem => {
                             const currentDaysLeft = rem.daysLeft;
                             return `
-                            <div class="flex items-center gap-3 p-3 bg-blue-50/50 rounded-2xl border border-blue-100">
-                                <div class="w-12 h-12 bg-white rounded-xl flex items-center justify-center text-blue-500 shadow-sm">
+                            <div class="flex items-center gap-3 p-3 border-b border-gray-100 last:border-b-0">
+                                <div class="w-9 h-9 flex items-center justify-center text-gray-400 flex-shrink-0">
                                     <i data-lucide="${rem.isManual ? 'calendar' : 'bell'}" class="w-5 h-5"></i>
                                 </div>
                                 <div class="flex-1">
                                     <div class="flex items-center gap-2">
                                         <h4 class="font-semibold text-gray-800 text-base">${rem.title}</h4>
-                                        ${!rem.isManual ? '<span class="text-[10px] text-blue-500 bg-blue-100 px-1.5 py-0.5 rounded font-bold">自動</span>' : ''}
+                                        ${!rem.isManual ? '<span class="text-[10px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded font-bold">自動</span>' : ''}
                                     </div>
-                                    <p class="text-sm mt-0.5 ${currentDaysLeft <= 3 ? 'text-red-500 font-bold' : 'text-blue-500'}">
+                                    <p class="text-sm mt-0.5 ${currentDaysLeft <= 3 ? 'text-red-500 font-bold' : 'text-gray-400'}">
                                         ${currentDaysLeft < 0 ? `<span class="text-red-500 font-bold">已過期 ${Math.abs(currentDaysLeft)} 天</span>` : currentDaysLeft === 0 ? '就是今天！' : `還有 ${currentDaysLeft} 天`}
                                     </p>
                                 </div>
                                 <div class="flex items-center gap-1.5">
-                                    <button onclick="App.completeReminder('${rem.id}', '${rem.isManual}', '${rem.typeId}')" class="w-9 h-9 rounded-full border border-blue-200 flex items-center justify-center text-blue-500 bg-white active:scale-90"><i data-lucide="check" class="w-5 h-5"></i></button>
-                                    <button onclick="App.removeReminder('${rem.id}', '${rem.isManual}', '${rem.originalReminderId}')" class="w-9 h-9 rounded-full border border-red-100 flex items-center justify-center text-red-300 bg-white active:scale-90"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                                    <button onclick="App.completeReminder('${rem.id}', '${rem.isManual}', '${rem.typeId}')" class="w-9 h-9 rounded-full border border-gray-200 flex items-center justify-center text-gray-400 bg-white active:scale-90"><i data-lucide="check" class="w-5 h-5"></i></button>
+                                    <button onclick="App.removeReminder('${rem.id}', '${rem.isManual}', '${rem.originalReminderId}')" class="w-9 h-9 rounded-full border border-gray-200 flex items-center justify-center text-gray-400 bg-white active:scale-90"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
                                 </div>
                             </div>
                           `; }).join('')}
