@@ -89,7 +89,7 @@
         // ==========================================
 
         // 每次發版打 git tag 時，這裡也同步手動更新，設定頁最下方會顯示，方便肉眼確認目前是哪一版
-        const APP_VERSION = 'v1.4';
+        const APP_VERSION = 'v1.9';
 
         const initialLifeSettings = [
             { id: 'weight', label: '體重記錄', icon: 'scale', enabled:  true, autoReminder: true, remindDays: 30, baseDate: '' },
@@ -1231,9 +1231,20 @@
             copyBackupCode: () => {
                 playClickSound();
                 const textarea = document.getElementById('backup-textarea');
-                textarea.select();
-                document.execCommand('copy');
-                showToast("已複製備份碼！請妥善保存。");
+                const text = textarea.value;
+                const fallbackCopy = () => {
+                    textarea.select();
+                    let ok = false;
+                    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+                    showToast(ok ? "已複製備份碼！請妥善保存。" : "複製失敗，請長按文字框手動選取全部文字複製", !ok);
+                };
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(() => {
+                        showToast("已複製備份碼！請妥善保存。");
+                    }).catch(fallbackCopy);
+                } else {
+                    fallbackCopy();
+                }
             },
             confirmImportCode: () => {
                 playClickSound();
