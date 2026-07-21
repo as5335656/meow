@@ -87,7 +87,10 @@
         // ==========================================
         // 1. 初始資料與全局狀態 (Global State)
         // ==========================================
-        
+
+        // 每次發版打 git tag 時，這裡也同步手動更新，設定頁最下方會顯示，方便肉眼確認目前是哪一版
+        const APP_VERSION = 'v1.4';
+
         const initialLifeSettings = [
             { id: 'weight', label: '體重記錄', icon: 'scale', enabled:  true, autoReminder: true, remindDays: 30, baseDate: '' },
             { id: 'flea', label: '驅蟲/點藥', icon: 'activity', enabled: true, autoReminder: true, remindDays: 30, baseDate: '' },
@@ -965,8 +968,9 @@
                     state.activeTab = 'food'; // 新增：若從首頁排行榜或排行榜明細彈窗點擊編輯，自動切換到飲食頁籤
                     state.foodRankDetail = null; // 新增：編輯時自動關閉排行榜明細彈窗，避免畫面重疊
                     render();
-                    // 畫面捲動回上方看表單
-                    document.getElementById('app-container').scrollTo({top: 0, behavior: 'smooth'});
+                    // 畫面直接捲動到編輯表單的位置，而非只捲到整頁最上方（表單上方還有月份選單、攝取量卡片等區塊）
+                    const formEl = document.getElementById('food-form-section');
+                    if (formEl) formEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 }
             },
             setFoodRating: (rating) => {
@@ -2010,7 +2014,7 @@
                 const uniqueFoodBrands = typeHistory.brands;
                 const uniqueFoodContents = typeHistory.contents;
                 html += `
-                <div class="bg-white rounded-3xl p-6 shadow-lg border border-blue-50 space-y-5 fade-in">
+                <div id="food-form-section" class="bg-white rounded-3xl p-6 shadow-lg border border-blue-50 space-y-5 fade-in">
                     <h3 class="font-bold text-gray-800 text-base flex items-center gap-1.5"><i data-lucide="utensils" class="w-5 h-5 text-blue-500"></i> ${state.editingFoodId ? '編輯餐點紀錄' : '新增餐點紀錄 / 記錄水分'}</h3>
                     <div>
                         <label class="text-xs text-gray-400 font-semibold block mb-1.5">記錄類型</label>
@@ -2308,6 +2312,7 @@
                     <p class="text-[10px] text-gray-400 text-center">系統已自動為您存檔，更換手機時才需要使用備份轉移資料。</p>
                 </div>
 
+                <p class="text-[10px] text-gray-300 text-center mt-5">${APP_VERSION}</p>
             </div>`;
             if (typeof lucide !== 'undefined') {
                 lucide.createIcons({root: modal});
