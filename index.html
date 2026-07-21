@@ -89,7 +89,7 @@
         // ==========================================
 
         // 每次發版打 git tag 時，這裡也同步手動更新，設定頁最下方會顯示，方便肉眼確認目前是哪一版
-        const APP_VERSION = 'v1.5';
+        const APP_VERSION = 'v1.6';
 
         const initialLifeSettings = [
             { id: 'weight', label: '體重記錄', icon: 'scale', enabled:  true, autoReminder: true, remindDays: 30, baseDate: '' },
@@ -2731,7 +2731,22 @@
 
     		// 📦 註冊 Service Worker，讓網頁能被快取、離線也能開啟（僅在瀏覽器支援時執行，不影響 App Inventor 內嵌環境）
     		if ('serviceWorker' in navigator) {
-        		navigator.serviceWorker.register('sw.js').catch((err) => console.warn('Service Worker 註冊失敗:', err));
+        		navigator.serviceWorker.register('sw.js').then((reg) => {
+            			// 主動檢查一次，不用乾等瀏覽器自己排程檢查（iOS 上尤其常常拖很久才檢查）
+            			reg.update();
+            			// PWA 從背景回到前景時，再檢查一次是否有新版本
+            			document.addEventListener('visibilitychange', () => {
+                			if (document.visibilityState === 'visible') reg.update();
+            			});
+        		}).catch((err) => console.warn('Service Worker 註冊失敗:', err));
+
+        		// 偵測到新版本的 Service Worker 已接管頁面，自動重新整理一次，確保立刻換成最新版本，不用手動關閉重開
+        		let swHasReloaded = false;
+        		navigator.serviceWorker.addEventListener('controllerchange', () => {
+            			if (swHasReloaded) return;
+            			swHasReloaded = true;
+            			window.location.reload();
+        		});
     		}
 	};
     </script>
