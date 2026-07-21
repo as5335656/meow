@@ -1072,12 +1072,10 @@
             // 新增：切換飲食類型時，即時刷新品牌/品項自動完成清單與管理面板（不觸發整頁重繪，避免使用者輸入內容被清空）
             refreshFoodDatalists: (type) => {
                 const hist = state.foodInputHistory[type] || { brands: [], contents: [] };
-                const escapeAttr = (s) => String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;');
 
-                const brandList = document.getElementById('food-brand-options');
-                const contentList = document.getElementById('food-content-options');
-                if (brandList) brandList.innerHTML = hist.brands.map(b => `<option value="${escapeAttr(b)}"></option>`).join('');
-                if (contentList) contentList.innerHTML = hist.contents.map(c => `<option value="${escapeAttr(c)}"></option>`).join('');
+                // 自製下拉建議清單依賴 state 即時讀取，切換類型時資料已變動，直接關閉避免顯示舊類型的建議
+                App.hideFoodSuggestions('brand');
+                App.hideFoodSuggestions('content');
 
                 const typeLabel = document.getElementById('food-history-manager-type-label');
                 if (typeLabel) typeLabel.innerText = type;
@@ -1090,6 +1088,42 @@
                     panelContent.innerHTML = renderFoodHistoryChips(hist.brands, hist.contents, type);
                     if (typeof lucide !== 'undefined') lucide.createIcons({root: panelContent});
                 }
+            },
+            // 新增：品牌/品項自製下拉建議清單（取代原生 datalist，避免 iOS PWA 獨立模式的 WKWebView 不顯示 datalist 下拉的問題）
+            _foodSuggestionSource: (field) => {
+                const currentType = document.getElementById('food-type') ? document.getElementById('food-type').value : '濕糧';
+                const hist = state.foodInputHistory[currentType] || { brands: [], contents: [] };
+                return field === 'brand' ? hist.brands : hist.contents;
+            },
+            renderFoodSuggestionList: (field, query) => {
+                const box = document.getElementById(`food-${field}-suggestions`);
+                if (!box) return;
+                const source = App._foodSuggestionSource(field);
+                const q = (query || '').trim().toLowerCase();
+                const filtered = q ? source.filter(v => v.toLowerCase().includes(q)) : source;
+                if (filtered.length === 0) {
+                    box.classList.add('hidden');
+                    box.innerHTML = '';
+                    return;
+                }
+                box.innerHTML = filtered.map(v => `<button type="button" onmousedown="event.preventDefault(); App.selectFoodSuggestion('${field}', '${escapeJsAttr(v)}')" class="block w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-blue-50 active:bg-blue-100">${escapeHtml(v)}</button>`).join('');
+                box.classList.remove('hidden');
+            },
+            showFoodSuggestions: (field) => {
+                const input = document.getElementById(`food-${field}`);
+                App.renderFoodSuggestionList(field, input ? input.value : '');
+            },
+            filterFoodSuggestions: (field, value) => {
+                App.renderFoodSuggestionList(field, value);
+            },
+            hideFoodSuggestions: (field) => {
+                const box = document.getElementById(`food-${field}-suggestions`);
+                if (box) { box.classList.add('hidden'); box.innerHTML = ''; }
+            },
+            selectFoodSuggestion: (field, value) => {
+                const input = document.getElementById(`food-${field}`);
+                if (input) input.value = value;
+                App.hideFoodSuggestions(field);
             },
             // 新增：展開/收合「常用清單管理」面板
             toggleFoodHistoryManagerPanel: () => {
@@ -1984,19 +2018,15 @@
 
                     <div id="food-detail-inputs" class="space-y-4 ${fData.type === '飲水' ? 'hidden' : ''}">
                         <div class="grid grid-cols-2 gap-4">
-                            <div>
+                            <div class="relative">
                                 <label class="text-xs text-gray-400 font-semibold block mb-1.5">品牌</label>
-                                <input id="food-brand" type="text" list="food-brand-options" value="${escapeHtml(fData.brand || '')}" placeholder="例: 汪喵、皇家" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50" />
-                                <datalist id="food-brand-options">
-                                    ${uniqueFoodBrands.map(b => `<option value="${escapeAttr(b)}"></option>`).join('')}
-                                </datalist>
+                                <input id="food-brand" type="text" autocomplete="off" value="${escapeHtml(fData.brand || '')}" placeholder="例: 汪喵、皇家" oninput="App.filterFoodSuggestions('brand', this.value)" onfocus="App.showFoodSuggestions('brand')" onblur="App.hideFoodSuggestions('brand')" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50" />
+                                <div id="food-brand-suggestions" class="hidden absolute z-20 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-48 overflow-y-auto"></div>
                             </div>
-                            <div>
+                            <div class="relative">
                                 <label class="text-xs text-gray-400 font-semibold block mb-1.5">品項名稱</label>
-                                <input id="food-content" type="text" list="food-content-options" value="${escapeHtml(fData.content || '')}" placeholder="例: 鯖魚無膠罐" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50" />
-                                <datalist id="food-content-options">
-                                    ${uniqueFoodContents.map(c => `<option value="${escapeAttr(c)}"></option>`).join('')}
-                                </datalist>
+                                <input id="food-content" type="text" autocomplete="off" value="${escapeHtml(fData.content || '')}" placeholder="例: 鯖魚無膠罐" oninput="App.filterFoodSuggestions('content', this.value)" onfocus="App.showFoodSuggestions('content')" onblur="App.hideFoodSuggestions('content')" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50" />
+                                <div id="food-content-suggestions" class="hidden absolute z-20 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-48 overflow-y-auto"></div>
                             </div>
                         </div>
 
