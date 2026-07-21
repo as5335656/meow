@@ -156,7 +156,7 @@
             foodRankingFilter: '全部',
             foodRankDetail: null, // 新增：點擊排行榜項目時，記錄 { name, type, monthStr } 以顯示該項目的詳細紀錄彈窗
             foodSelectedMonth: '', // 新增：飲食歷史紀錄目前檢視的月份 (格式 YYYY-MM，空字串代表預設為當月)
-            foodHistoryExpanded: false, // 新增：飲食歷史細項預設收合，需點擊才展開
+            foodHistoryTypeFilter: '全部', // 新增：點擊乾糧/濕糧/點心攝取量卡片時，篩選下方歷史紀錄；預設不篩選
 
             showBackupModal: false,
             backupType: 'export',
@@ -428,8 +428,8 @@
                 showBackupModal: false,
                 showAddShoppingItem: false,
                 activeShoppingItemId: null,
-                foodHistoryExpanded: false,
                 foodRankDetail: null,
+                foodHistoryTypeFilter: '全部',
                 editingLifeRecordId: null,
                 tempLifePhoto: ''
             };
@@ -526,6 +526,7 @@
                 state.showAddCustomLife = false;
                 state.editingLifeRecordId = null;
                 state.tempLifePhoto = '';
+                state.foodHistoryTypeFilter = '全部'; // 每次切換頁籤都重置，避免上次篩選被記住
                 render();
             },
             toggleSettings: () => {
@@ -831,17 +832,16 @@
                 state.foodRankDetail = null;
                 render();
             },
-            // 新增：切換飲食歷史紀錄檢視的月份，切換後細項預設收合
+            // 新增：切換飲食歷史紀錄檢視的月份
             setFoodMonth: (monthStr) => {
                 playClickSound();
                 state.foodSelectedMonth = monthStr;
-                state.foodHistoryExpanded = false;
                 render();
             },
-            // 新增：展開/收合飲食歷史細項清單
-            toggleFoodHistoryDetail: () => {
+            // 新增：點擊乾糧/濕糧/點心攝取量卡片，篩選下方歷史紀錄；再點一次同一個類型則清除篩選
+            setFoodHistoryTypeFilter: (type) => {
                 playClickSound();
-                state.foodHistoryExpanded = !state.foodHistoryExpanded;
+                state.foodHistoryTypeFilter = (state.foodHistoryTypeFilter === type) ? '全部' : type;
                 render();
             },
             // ===== 待買清單 =====
@@ -1170,8 +1170,8 @@
                     showBackupModal: false,
                     showAddShoppingItem: false,
                     activeShoppingItemId: null,
-                    foodHistoryExpanded: false,
                     foodRankDetail: null,
+                foodHistoryTypeFilter: '全部',
                     editingLifeRecordId: null,
                     tempLifePhoto: '',
                     photoPickTarget: 'profile',
@@ -1251,8 +1251,8 @@
                     showBackupModal: false,
                     showAddShoppingItem: false,
                     activeShoppingItemId: null,
-                    foodHistoryExpanded: false,
                     foodRankDetail: null,
+                foodHistoryTypeFilter: '全部',
                     editingLifeRecordId: null,
                     tempLifePhoto: '',
                     photoPickTarget: 'profile',
@@ -1664,17 +1664,18 @@
                         <button onclick="App.setTab('food')" class="text-blue-500 text-sm font-semibold">管理</button>
                     </div>
                     <div class="space-y-3">
-                        ${state.foodRecords.length === 0 ? '<p class="text-gray-400 text-sm text-center py-4">無近期飲食紀錄</p>' : 
+                        ${state.foodRecords.length === 0 ? '<p class="text-gray-400 text-sm text-center py-4">無近期飲食紀錄</p>' :
                           state.foodRecords.slice(0,3).map(r => `
-                            <div class="bg-gray-50/75 p-3.5 rounded-2xl border border-gray-100 flex items-center gap-3">
-                                <div class="w-10 h-10 rounded-xl flex items-center justify-center ${r.type==='濕糧'?'bg-blue-50 text-blue-500': r.type==='點心'?'bg-pink-50 text-pink-500' : r.type==='飲水'?'bg-cyan-50 text-cyan-500':'bg-amber-50 text-amber-500'}">
+                            <div onclick="App.editFoodRecord(${r.id})" class="bg-gray-50/75 p-3.5 rounded-2xl border border-gray-100 flex items-center gap-3 cursor-pointer active:scale-[0.98] hover:bg-gray-100/70 transition-all">
+                                <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${r.type==='濕糧'?'bg-blue-50 text-blue-500': r.type==='點心'?'bg-pink-50 text-pink-500' : r.type==='飲水'?'bg-cyan-50 text-cyan-500':'bg-amber-50 text-amber-500'}">
                                     <i data-lucide="${r.type==='濕糧'?'fish': r.type==='點心'?'star': r.type==='飲水'?'droplet':'bone'}" class="w-5 h-5"></i>
                                 </div>
                                 <div class="flex-1 min-w-0">
                                     <h4 class="font-semibold text-gray-800 text-sm truncate">${escapeHtml(r.brand)} • ${escapeHtml(r.content)}</h4>
                                     <p class="text-xs text-gray-400 mt-1">${r.type} ${r.type!=='飲水'?`• ${r.amount}g`:''} ${r.water>0?`• 水+${r.water}ml`:''}</p>
                                 </div>
-                                <span class="text-xs text-gray-400">${r.date ? r.date.slice(5) : ''} ${r.time || ''}</span>
+                                <span class="text-xs text-gray-400 flex-shrink-0">${r.date ? r.date.slice(5) : ''} ${r.time || ''}</span>
+                                <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-gray-300 flex-shrink-0"></i>
                             </div>
                         `).join('')}
                     </div>
@@ -1921,7 +1922,9 @@
                 '點心': { bg: 'bg-pink-50', text: 'text-pink-600', icon: 'star' },
                 '飲水': { bg: 'bg-cyan-50', text: 'text-cyan-600', icon: 'droplet' },
             };
+            const foodHistoryTypeFilter = state.foodHistoryTypeFilter || '全部';
             const groupedFoodHistory = ['乾糧', '濕糧', '點心', '飲水']
+                .filter(t => foodHistoryTypeFilter === '全部' || t === foodHistoryTypeFilter)
                 .map(t => ({ type: t, meta: foodHistoryTypeMeta[t], records: selectedMonthRecords.filter(r => r.type === t) }))
                 .filter(g => g.records.length > 0);
             
@@ -1977,17 +1980,17 @@
                 <div class="transition-all">
                     ${!isCurrentMonth ? `<p class="text-xs font-bold text-gray-400 mb-2 px-1 flex items-center gap-1"><i data-lucide="calendar" class="w-3 h-3"></i> ${monthLabel} 攝取量</p>` : ''}
                     <div class="grid grid-cols-3 gap-3">
-                    <div class="bg-amber-50 p-4 rounded-[1.5rem] border border-amber-100/60 shadow-sm flex flex-col items-center relative overflow-hidden">
+                    <div onclick="App.setFoodHistoryTypeFilter('乾糧')" class="bg-amber-50 p-4 rounded-[1.5rem] border ${foodHistoryTypeFilter === '乾糧' ? 'border-amber-400 ring-2 ring-amber-300' : 'border-amber-100/60'} shadow-sm flex flex-col items-center relative overflow-hidden cursor-pointer active:scale-95 transition-all">
                         <div class="absolute -right-2 -bottom-2 opacity-[0.15] text-amber-500 pointer-events-none"><i data-lucide="bone" class="w-12 h-12"></i></div>
                         <p class="text-sm text-amber-600 font-bold mb-1 relative z-10">乾糧</p>
                         <p class="text-xl font-black text-amber-900 relative z-10">${totalDry} <span class="text-xs font-bold text-amber-600/60">g</span></p>
                     </div>
-                    <div class="bg-blue-50 p-4 rounded-[1.5rem] border border-blue-100/60 shadow-sm flex flex-col items-center relative overflow-hidden">
+                    <div onclick="App.setFoodHistoryTypeFilter('濕糧')" class="bg-blue-50 p-4 rounded-[1.5rem] border ${foodHistoryTypeFilter === '濕糧' ? 'border-blue-400 ring-2 ring-blue-300' : 'border-blue-100/60'} shadow-sm flex flex-col items-center relative overflow-hidden cursor-pointer active:scale-95 transition-all">
                         <div class="absolute -right-2 -bottom-2 opacity-[0.15] text-blue-500 pointer-events-none"><i data-lucide="fish" class="w-12 h-12"></i></div>
                         <p class="text-sm text-blue-600 font-bold mb-1 relative z-10">濕糧</p>
                         <p class="text-xl font-black text-blue-900 relative z-10">${totalWet} <span class="text-xs font-bold text-blue-600/60">g</span></p>
                     </div>
-                    <div class="bg-pink-50 p-4 rounded-[1.5rem] border border-pink-100/60 shadow-sm flex flex-col items-center relative overflow-hidden">
+                    <div onclick="App.setFoodHistoryTypeFilter('點心')" class="bg-pink-50 p-4 rounded-[1.5rem] border ${foodHistoryTypeFilter === '點心' ? 'border-pink-400 ring-2 ring-pink-300' : 'border-pink-100/60'} shadow-sm flex flex-col items-center relative overflow-hidden cursor-pointer active:scale-95 transition-all">
                         <div class="absolute -right-2 -bottom-2 opacity-[0.15] text-pink-500 pointer-events-none"><i data-lucide="star" class="w-12 h-12"></i></div>
                         <p class="text-sm text-pink-600 font-bold mb-1 relative z-10">點心</p>
                         <p class="text-xl font-black text-pink-900 relative z-10">${totalSnack} <span class="text-xs font-bold text-pink-600/60">g</span></p>
@@ -2128,27 +2131,9 @@
             if (state.foodLayout.history) {
                 html += `
                 <div class="space-y-3 transition-all">
-                    <div class="flex justify-between items-center px-1">
-                        <h3 class="font-bold text-gray-800 text-base flex items-center gap-1.5"><i data-lucide="history" class="w-5 h-5 text-blue-500"></i> 歷史紀錄 <span class="text-xs font-semibold text-gray-400">・${monthLabel}</span></h3>
-                    </div>
-                    ${selectedMonthRecords.length === 0 ? `<p class="text-gray-400 text-sm text-center py-8 bg-white rounded-3xl border border-gray-100">${monthLabel} 尚無飲食紀錄</p>` : `
+                    ${selectedMonthRecords.length === 0 ? `<p class="text-gray-400 text-sm text-center py-8 bg-white rounded-3xl border border-gray-100">${monthLabel} 尚無飲食紀錄</p>` : groupedFoodHistory.length === 0 ? `<p class="text-gray-400 text-sm text-center py-8 bg-white rounded-3xl border border-gray-100">本月無「${foodHistoryTypeFilter}」紀錄，點一次上方卡片可清除篩選</p>` : `
 
-                    <div class="bg-white rounded-3xl p-4 border border-gray-100 flex items-center justify-between gap-3">
-                        <div class="flex items-center gap-3 min-w-0">
-                            <div class="w-11 h-11 rounded-2xl bg-blue-50 text-blue-500 flex items-center justify-center flex-shrink-0">
-                                <i data-lucide="notebook-text" class="w-5 h-5"></i>
-                            </div>
-                            <div class="min-w-0">
-                                <p class="text-sm font-bold text-gray-700">共 ${selectedMonthRecords.length} 筆紀錄</p>
-                                <p class="text-xs text-gray-400 truncate">細項預設隱藏，點擊即可查看</p>
-                            </div>
-                        </div>
-                        <button onclick="App.toggleFoodHistoryDetail()" class="text-blue-500 text-xs font-bold px-3.5 py-2.5 rounded-full bg-blue-50 hover:bg-blue-100 flex items-center gap-1 flex-shrink-0 active:scale-95 transition-colors">
-                            ${state.foodHistoryExpanded ? '收合明細' : '查看明細'} <i data-lucide="${state.foodHistoryExpanded ? 'chevron-up' : 'chevron-right'}" class="w-3.5 h-3.5"></i>
-                        </button>
-                    </div>
-
-                    ${state.foodHistoryExpanded ? groupedFoodHistory.map(group => `
+                    ${groupedFoodHistory.map(group => `
                         <div class="space-y-2 fade-in">
                             <div class="flex items-center px-1 pt-1">
                                 <span class="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full ${group.meta.bg} ${group.meta.text}">
@@ -2179,7 +2164,7 @@
                             </div>
                             `).join('')}
                         </div>
-                    `).join('') : ''}
+                    `).join('')}
                     `}
                 </div>`;
             }
