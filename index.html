@@ -89,7 +89,7 @@
         // ==========================================
 
         // 每次發版打 git tag 時，這裡也同步手動更新，設定頁最下方會顯示，方便肉眼確認目前是哪一版
-        const APP_VERSION = 'v1.6';
+        const APP_VERSION = 'v1.7';
 
         const initialLifeSettings = [
             { id: 'weight', label: '體重記錄', icon: 'scale', enabled:  true, autoReminder: true, remindDays: 30, baseDate: '' },
@@ -2083,13 +2083,13 @@
                             <input id="food-water" type="number" value="${fData.water !== undefined ? fData.water : ''}" placeholder="0" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50" />
                         </div>
                         <div class="grid grid-cols-2 gap-3">
-                            <div>
+                            <div class="min-w-0">
                                 <label class="text-xs text-gray-400 font-semibold block mb-1.5">餵食日期</label>
-                                <input id="food-date" type="date" value="${fData.date || today}" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50" />
+                                <input id="food-date" type="date" value="${fData.date || today}" class="w-full min-w-0 text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50" />
                             </div>
-                            <div>
+                            <div class="min-w-0">
                                 <label class="text-xs text-gray-400 font-semibold block mb-1.5">時間</label>
-                                <input id="food-time" type="time" value="${fData.time || todayTime}" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50" />
+                                <input id="food-time" type="time" value="${fData.time || todayTime}" class="w-full min-w-0 text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50" />
                             </div>
                         </div>
                     </div>
