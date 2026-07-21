@@ -527,6 +527,9 @@
                 state.editingLifeRecordId = null;
                 state.tempLifePhoto = '';
                 state.foodHistoryTypeFilter = '全部'; // 每次切換頁籤都重置，避免上次篩選被記住
+                state.showAddFood = false; // 每次切換頁籤都關閉新增/編輯餐點表單，避免卡在上次編輯的紀錄
+                state.editingFoodId = null;
+                state.tempFoodForm = null;
                 render();
             },
             toggleSettings: () => {
