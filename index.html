@@ -91,7 +91,7 @@
         // ==========================================
 
         // 每次發版打 git tag 時，這裡也同步手動更新，設定頁最下方會顯示，方便肉眼確認目前是哪一版
-        const APP_VERSION = 'v2.0';
+        const APP_VERSION = 'v2.1';
 
         const initialLifeSettings = [
             { id: 'weight', label: '體重記錄', icon: 'scale', enabled:  true, autoReminder: true, remindDays: 30, baseDate: '' },
@@ -170,11 +170,15 @@
             shoppingList: [],
             showAddShoppingItem: false,
             activeShoppingItemId: null,
-            shopViewMode: '待買', // 新增：待買清單頁面切換「待買」/「庫存」檢視
+            shopViewMode: '待買', // 新增：待買清單頁面切換「待買」/「庫存」/「口袋」檢視
             inventory: [], // 新增：依品牌記錄目前庫存克數，跟待買清單確認購買、飲食紀錄消耗連動
             confirmPurchaseId: null, // 新增：待買項目按下勾選時，等待使用者確認「是否確認購買」彈窗
             showAddInventory: false, // 新增：庫存頁面新增/設定品牌庫存的表單開關
             editingInventoryEntry: null, // 新增：點擊某個既有品牌庫存列時，帶入表單編輯該筆（品牌+類型）的庫存量
+            pocketList: [], // 新增：口袋清單，跟待買一樣可存紀錄，但不需品牌/類型/克數，也不與庫存或飲食紀錄連動
+            showAddPocketItem: false,
+            activePocketItemId: null,
+            tempPocketImage: '', // 新增：新增口袋品項時，圖片先暫存在這裡，儲存後才正式寫入該筆項目
             confirmDeleteAction: null // 新增：所有刪除操作共用的確認彈窗，儲存 { message, action } 待使用者按下確認才真正執行
         };
 
@@ -442,6 +446,9 @@
                 confirmPurchaseId: null,
                 showAddInventory: false,
                 editingInventoryEntry: null,
+                showAddPocketItem: false,
+                activePocketItemId: null,
+                tempPocketImage: '',
                 confirmDeleteAction: null,
                 foodRankDetail: null,
                 foodHistoryTypeFilter: '全部',
@@ -887,6 +894,7 @@
                 state.showAddShoppingItem = false;
                 state.showAddInventory = false;
                 state.editingInventoryEntry = null;
+                state.showAddPocketItem = false;
                 render();
             },
             toggleAddShoppingItem: () => {
@@ -1076,6 +1084,153 @@
                 const item = state.shoppingList.find(i => i.id === state.activeShoppingItemId);
                 if (item) item.imageData = '';
                 render();
+            },
+            // ===== 口袋清單（跟待買一樣可存紀錄，但不需品牌/類型/克數，也不與庫存或飲食紀錄連動）=====
+            toggleAddPocketItem: () => {
+                playClickSound();
+                state.showAddPocketItem = !state.showAddPocketItem;
+                if (state.showAddPocketItem) state.tempPocketImage = '';
+                render();
+            },
+            addPocketItem: () => {
+                playClickSound();
+                const nameEl = document.getElementById('pocket-item-name');
+                const noteEl = document.getElementById('pocket-item-note');
+                const linkEl = document.getElementById('pocket-item-link');
+                const name = nameEl ? nameEl.value.trim() : '';
+                if (!name) { showToast('請輸入品項名稱', true); return; }
+                if (!Array.isArray(state.pocketList)) state.pocketList = [];
+                state.pocketList.unshift({
+                    id: Date.now(),
+                    name,
+                    note: noteEl ? noteEl.value : '',
+                    link: linkEl ? linkEl.value.trim() : '',
+                    imageData: state.tempPocketImage || ''
+                });
+                state.showAddPocketItem = false;
+                state.tempPocketImage = '';
+                render();
+            },
+            deletePocketItem: (id) => {
+                playClickSound();
+                if (state.activePocketItemId === id) state.activePocketItemId = null;
+                state.pocketList = (state.pocketList || []).filter(item => item.id !== id);
+                render();
+            },
+            openPocketDetail: (id) => {
+                playClickSound();
+                if (state.activePocketItemId && state.activePocketItemId !== id) {
+                    const cur = (state.pocketList || []).find(i => i.id === state.activePocketItemId);
+                    if (cur) {
+                        const n = document.getElementById('pocket-detail-note');
+                        const l = document.getElementById('pocket-detail-link');
+                        if (n) cur.note = n.value;
+                        if (l) cur.link = l.value.trim();
+                    }
+                }
+                state.activePocketItemId = (state.activePocketItemId === id) ? null : id;
+                render();
+                if (state.activePocketItemId) {
+                    setTimeout(() => {
+                        const el = document.getElementById('pocket-detail-panel');
+                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    }, 80);
+                }
+            },
+            savePocketDetail: () => {
+                playClickSound();
+                const item = (state.pocketList || []).find(i => i.id === state.activePocketItemId);
+                if (item) {
+                    const n = document.getElementById('pocket-detail-note');
+                    const l = document.getElementById('pocket-detail-link');
+                    if (n) item.note = n.value;
+                    if (l) item.link = l.value.trim();
+                }
+                state.activePocketItemId = null;
+                showToast('已儲存');
+                render();
+            },
+            handlePocketImage: (input) => {
+                const file = input.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const maxWidth = 800;
+                        let width = img.width;
+                        let height = img.height;
+                        if (width > maxWidth) {
+                            height = Math.round((height * maxWidth) / width);
+                            width = maxWidth;
+                        }
+                        const canvas = document.createElement('canvas');
+                        canvas.width = width;
+                        canvas.height = height;
+                        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+                        const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
+
+                        const item = (state.pocketList || []).find(i => i.id === state.activePocketItemId);
+                        if (item) { item.imageData = compressedBase64; render(); }
+                    };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            },
+            removePocketImage: () => {
+                playClickSound();
+                const item = (state.pocketList || []).find(i => i.id === state.activePocketItemId);
+                if (item) item.imageData = '';
+                render();
+            },
+            // 新增：新增口袋品項表單裡的圖片上傳，項目還沒建立前圖片先暫存，按下「新增」才寫入該筆項目
+            // 這裡刻意不呼叫整頁 render()，只更新圖片預覽區塊本身，避免使用者已經打好的品項名稱/備註/連結被整頁重繪清空
+            handleTempPocketImage: (input) => {
+                const file = input.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const maxWidth = 800;
+                        let width = img.width;
+                        let height = img.height;
+                        if (width > maxWidth) {
+                            height = Math.round((height * maxWidth) / width);
+                            width = maxWidth;
+                        }
+                        const canvas = document.createElement('canvas');
+                        canvas.width = width;
+                        canvas.height = height;
+                        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+                        state.tempPocketImage = canvas.toDataURL('image/jpeg', 0.7);
+                        App.refreshPocketImagePreview();
+                    };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            },
+            removeTempPocketImage: () => {
+                playClickSound();
+                state.tempPocketImage = '';
+                App.refreshPocketImagePreview();
+            },
+            refreshPocketImagePreview: () => {
+                const area = document.getElementById('pocket-add-image-area');
+                if (!area) return;
+                area.innerHTML = state.tempPocketImage ? `
+                    <div class="relative">
+                        <img src="${state.tempPocketImage}" class="w-full rounded-2xl object-cover max-h-56 border border-gray-100 shadow-sm" />
+                        <button onclick="App.removeTempPocketImage()" class="absolute top-2 right-2 w-8 h-8 bg-red-500 text-white rounded-full flex items-center justify-center shadow-md active:scale-90">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        </button>
+                    </div>` : `
+                    <label class="flex flex-col items-center justify-center w-full h-28 border-2 border-dashed border-gray-200 rounded-2xl bg-gray-50 cursor-pointer hover:border-green-300 hover:bg-green-50/50 transition-all">
+                        <i data-lucide="image-plus" class="w-8 h-8 text-gray-300 mb-1.5"></i>
+                        <span class="text-xs text-gray-400 font-semibold">點此選擇或拍攝圖片</span>
+                        <input type="file" accept="image/*" class="hidden" onchange="App.handleTempPocketImage(this)" />
+                    </label>`;
+                if (typeof lucide !== 'undefined') lucide.createIcons({ root: area });
             },
             toggleAddFood: () => {
                 playClickSound();
@@ -1351,6 +1506,9 @@
                     confirmPurchaseId: null,
                     showAddInventory: false,
                     editingInventoryEntry: null,
+                showAddPocketItem: false,
+                activePocketItemId: null,
+                tempPocketImage: '',
                 confirmDeleteAction: null,
                     foodRankDetail: null,
                 foodHistoryTypeFilter: '全部',
@@ -1447,6 +1605,9 @@
                     confirmPurchaseId: null,
                     showAddInventory: false,
                     editingInventoryEntry: null,
+                showAddPocketItem: false,
+                activePocketItemId: null,
+                tempPocketImage: '',
                 confirmDeleteAction: null,
                     foodRankDetail: null,
                 foodHistoryTypeFilter: '全部',
@@ -2637,6 +2798,7 @@
         const renderShop = () => {
             const shoppingList = Array.isArray(state.shoppingList) ? state.shoppingList : [];
             const inventory = Array.isArray(state.inventory) ? state.inventory : [];
+            const pocketList = Array.isArray(state.pocketList) ? state.pocketList : [];
             const viewMode = state.shopViewMode || '待買';
             const shopTypeMeta = {
                 '乾糧': { bg: 'bg-amber-50', text: 'text-amber-600' },
@@ -2662,16 +2824,21 @@
                     <button onclick="App.toggleAddShoppingItem()" class="bg-green-500 text-white text-xs font-semibold px-4 py-2.5 rounded-full flex items-center gap-1.5 active:scale-95 transition-transform shadow-md shadow-green-100 flex-shrink-0">
                         <i data-lucide="${state.showAddShoppingItem ? 'x' : 'plus'}" class="w-4 h-4"></i>
                         ${state.showAddShoppingItem ? '取消' : '新增品項'}
-                    </button>` : `
+                    </button>` : viewMode === '庫存' ? `
                     <button onclick="App.toggleAddInventory()" class="bg-green-500 text-white text-xs font-semibold px-4 py-2.5 rounded-full flex items-center gap-1.5 active:scale-95 transition-transform shadow-md shadow-green-100 flex-shrink-0">
                         <i data-lucide="${state.showAddInventory ? 'x' : 'plus'}" class="w-4 h-4"></i>
                         ${state.showAddInventory ? '取消' : '設定庫存'}
+                    </button>` : `
+                    <button onclick="App.toggleAddPocketItem()" class="bg-green-500 text-white text-xs font-semibold px-4 py-2.5 rounded-full flex items-center gap-1.5 active:scale-95 transition-transform shadow-md shadow-green-100 flex-shrink-0">
+                        <i data-lucide="${state.showAddPocketItem ? 'x' : 'plus'}" class="w-4 h-4"></i>
+                        ${state.showAddPocketItem ? '取消' : '新增品項'}
                     </button>`}
                 </div>
 
                 <div class="flex gap-1.5 bg-gray-100 p-1.5 rounded-2xl">
                     <button onclick="App.setShopViewMode('待買')" class="flex-1 py-2 rounded-xl text-sm font-bold transition-all ${viewMode === '待買' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-400'}">待買</button>
                     <button onclick="App.setShopViewMode('庫存')" class="flex-1 py-2 rounded-xl text-sm font-bold transition-all ${viewMode === '庫存' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-400'}">庫存</button>
+                    <button onclick="App.setShopViewMode('口袋')" class="flex-1 py-2 rounded-xl text-sm font-bold transition-all ${viewMode === '口袋' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-400'}">口袋</button>
                 </div>
 
                 ${viewMode === '待買' ? `
@@ -2768,7 +2935,7 @@
                       `).join('')}
                     </div>
                 </div>
-                ` : `
+                ` : viewMode === '庫存' ? `
                 ${state.showAddInventory ? `
                 <div class="bg-white rounded-3xl p-5 shadow-sm border border-green-100 fade-in space-y-2.5">
                     <p class="text-xs text-gray-400 font-semibold">${state.editingInventoryEntry ? `編輯「${escapeHtml(state.editingInventoryEntry.type)} ${escapeHtml(state.editingInventoryEntry.brand)}」的庫存` : '新增品牌庫存（直接設定總量）'}</p>
@@ -2801,6 +2968,92 @@
                                 </button>
                             </div>
                             `).join('')}
+                        </div>
+                      `).join('')}
+                    </div>
+                </div>
+                ` : `
+                ${state.showAddPocketItem ? `
+                <div class="bg-white rounded-3xl p-5 shadow-sm border border-green-100 fade-in space-y-4">
+                    <input id="pocket-item-name" type="text" placeholder="品項名稱..." class="w-full p-3 rounded-xl border border-gray-200 text-sm outline-none bg-gray-50 focus:bg-white focus:border-green-400 transition-all" />
+                    <div>
+                        <label class="text-[10px] text-gray-400 font-bold block mb-1.5">備註內容</label>
+                        <textarea id="pocket-item-note" placeholder="輸入規格、數量、備忘..." class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50 focus:bg-white focus:border-green-400 h-20 resize-none"></textarea>
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-gray-400 font-bold block mb-1.5">購買連結</label>
+                        <input id="pocket-item-link" type="url" placeholder="貼上網址（https://...）" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50 focus:bg-white focus:border-green-400 transition-all" />
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-gray-400 font-bold block mb-1.5">商品圖片</label>
+                        <div id="pocket-add-image-area">
+                            <label class="flex flex-col items-center justify-center w-full h-28 border-2 border-dashed border-gray-200 rounded-2xl bg-gray-50 cursor-pointer hover:border-green-300 hover:bg-green-50/50 transition-all">
+                                <i data-lucide="image-plus" class="w-8 h-8 text-gray-300 mb-1.5"></i>
+                                <span class="text-xs text-gray-400 font-semibold">點此選擇或拍攝圖片</span>
+                                <input type="file" accept="image/*" class="hidden" onchange="App.handleTempPocketImage(this)" />
+                            </label>
+                        </div>
+                    </div>
+                    <button onclick="App.addPocketItem()" class="w-full bg-green-500 text-white py-3 rounded-xl text-sm font-bold hover:bg-green-600 transition-colors">新增</button>
+                </div>` : ''}
+
+                <div class="bg-white rounded-3xl p-5 shadow-sm border border-gray-100">
+                    <h3 class="font-bold text-gray-700 text-sm mb-3 flex items-center gap-1.5">
+                        <i data-lucide="bookmark" class="w-4 h-4 text-green-500"></i> 口袋清單
+                        <span class="text-green-500 font-black">(${pocketList.length})</span>
+                    </h3>
+                    <div class="space-y-2">
+                    ${pocketList.length === 0 ? `<p class="text-gray-400 text-sm text-center py-6">口袋清單是空的<br><span class="text-xs">點右上角「新增品項」加入清單</span></p>` :
+                      pocketList.map(item => `
+                        <div class="rounded-2xl border transition-all ${state.activePocketItemId === item.id ? 'border-green-300 bg-green-50/60' : 'border-gray-100 bg-gray-50/60'}">
+                            <div class="flex items-center gap-3 p-3.5">
+                                <button onclick="App.requestDelete('確定要從口袋清單移除「${escapeJsAttr(item.name)}」嗎？', () => App.deletePocketItem(${item.id}))" class="w-6 h-6 rounded-full border-2 border-gray-300 flex-shrink-0 bg-white hover:border-green-400 transition-colors active:scale-90"></button>
+                                <span onclick="App.openPocketDetail(${item.id})" class="flex-1 text-sm font-semibold text-gray-800 cursor-pointer truncate">${escapeHtml(item.name)}</span>
+                                <div class="flex items-center gap-1 flex-shrink-0">
+                                    ${item.link ? '<i data-lucide="link" class="w-3.5 h-3.5 text-blue-400"></i>' : ''}
+                                    ${item.imageData ? '<i data-lucide="image" class="w-3.5 h-3.5 text-purple-400"></i>' : ''}
+                                    ${item.note ? '<i data-lucide="file-text" class="w-3.5 h-3.5 text-gray-300"></i>' : ''}
+                                    <button onclick="App.openPocketDetail(${item.id})" class="w-8 h-8 rounded-full flex items-center justify-center text-gray-400 hover:text-green-500 hover:bg-green-50 transition-colors ml-1">
+                                        <i data-lucide="${state.activePocketItemId === item.id ? 'chevron-up' : 'chevron-down'}" class="w-4 h-4"></i>
+                                    </button>
+                                    <button onclick="App.requestDelete('確定要從口袋清單移除「${escapeJsAttr(item.name)}」嗎？', () => App.deletePocketItem(${item.id}))" class="w-8 h-8 rounded-full flex items-center justify-center text-red-300 hover:text-red-400 hover:bg-red-50 transition-colors">
+                                        <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            ${state.activePocketItemId === item.id ? `
+                            <div id="pocket-detail-panel" class="border-t border-green-100 p-4 space-y-4 fade-in">
+                                <div>
+                                    <label class="text-[10px] text-gray-400 font-bold block mb-1.5">備註內容</label>
+                                    <textarea id="pocket-detail-note" placeholder="輸入規格、數量、備忘..." class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-white focus:border-green-400 h-20 resize-none">${escapeHtml(item.note || '')}</textarea>
+                                </div>
+                                <div>
+                                    <label class="text-[10px] text-gray-400 font-bold block mb-1.5">連結</label>
+                                    <input id="pocket-detail-link" type="url" placeholder="貼上網址（https://...）" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-white focus:border-green-400 transition-all" value="${escapeHtml(item.link || '')}" />
+                                    ${item.link ? `<a href="${escapeHtml(item.link)}" target="_blank" class="mt-2 flex items-center gap-2 p-2.5 bg-blue-50 rounded-xl">
+                                        <i data-lucide="external-link" class="w-4 h-4 text-blue-500 flex-shrink-0"></i>
+                                        <span class="text-blue-600 text-xs break-all">${escapeHtml(item.link)}</span>
+                                    </a>` : ''}
+                                </div>
+                                <div>
+                                    <label class="text-[10px] text-gray-400 font-bold block mb-1.5">圖片</label>
+                                    ${item.imageData ? `
+                                    <div class="relative">
+                                        <img src="${item.imageData}" class="w-full rounded-2xl object-cover max-h-56 border border-gray-100 shadow-sm" />
+                                        <button onclick="App.removePocketImage()" class="absolute top-2 right-2 w-8 h-8 bg-red-500 text-white rounded-full flex items-center justify-center shadow-md active:scale-90">
+                                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                        </button>
+                                    </div>` : `
+                                    <label class="flex flex-col items-center justify-center w-full h-28 border-2 border-dashed border-gray-200 rounded-2xl bg-gray-50 cursor-pointer hover:border-green-300 hover:bg-green-50/50 transition-all">
+                                        <i data-lucide="image-plus" class="w-8 h-8 text-gray-300 mb-1.5"></i>
+                                        <span class="text-xs text-gray-400 font-semibold">點此選擇或拍攝圖片</span>
+                                        <input type="file" accept="image/*" class="hidden" onchange="App.handlePocketImage(this)" />
+                                    </label>`}
+                                </div>
+                                <button onclick="App.savePocketDetail()" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl text-sm transition-colors shadow-md active:scale-95">
+                                    儲存並關閉
+                                </button>
+                            </div>` : ''}
                         </div>
                       `).join('')}
                     </div>
