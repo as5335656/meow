@@ -91,7 +91,7 @@
         // ==========================================
 
         // 每次發版打 git tag 時，這裡也同步手動更新，設定頁最下方會顯示，方便肉眼確認目前是哪一版
-        const APP_VERSION = 'v2.2';
+        const APP_VERSION = 'v2.3';
 
         const initialLifeSettings = [
             { id: 'weight', label: '體重記錄', icon: 'scale', enabled:  true, autoReminder: true, remindDays: 30, baseDate: '' },
@@ -942,6 +942,16 @@
                     state.inventory.push({ brand: b, type, unit: u, amount: delta });
                 }
             },
+            // 新增：飲食紀錄對庫存的增減統一由這裡處理 —— 濕糧特殊規則：紀錄本身仍以克數記錄餵食量，
+            // 但庫存固定以「罐」為單位、每筆紀錄固定增減 1 罐，不論克數多少（其他類型則照品牌+類型+單位正常增減）
+            adjustInventoryForFoodRecord: (record, sign) => {
+                if (!record || record.type === '飲水') return;
+                if (record.type === '濕糧') {
+                    App.adjustInventory(record.brand, '濕糧', '罐', sign * 1);
+                } else {
+                    App.adjustInventory(record.brand, record.type, record.unit || '克', sign * (record.amount || 0));
+                }
+            },
             // 新增：點擊待買項目的勾選鈕，先跳出「是否確認購買」彈窗，而非直接勾選
             requestConfirmPurchase: (id) => {
                 playClickSound();
@@ -1355,19 +1365,35 @@
                 App.refreshFoodUnitOptions();
             },
             // 新增：依「目前類型 + 目前品牌」重新整理單位選單，只列出該品牌在庫存裡實際存在的單位
+            // 濕糧特殊處理：不給選單位，固定顯示「克」（庫存扣除邏輯另外固定扣 1 罐，跟這裡顯示的克數無關）
             refreshFoodUnitOptions: () => {
-                const select = document.getElementById('food-unit');
+                const container = document.getElementById('food-unit-container');
+                const labelEl = document.getElementById('food-amount-label');
                 const typeEl = document.getElementById('food-type');
                 const brandEl = document.getElementById('food-brand');
-                if (!select) return;
+                if (!container) return;
                 const type = typeEl ? typeEl.value : '';
                 const brand = brandEl ? brandEl.value : '';
+
+                if (labelEl) labelEl.innerText = '餵食數量' + (type === '濕糧' ? '（庫存固定以罐計算，扣 1 罐/次）' : '');
+
+                if (type === '濕糧') {
+                    container.innerHTML = `<span class="block text-sm p-3 rounded-xl border border-gray-200 bg-gray-100 text-gray-500 text-center">克</span>`;
+                    if (state.tempFoodForm) state.tempFoodForm.unit = '克';
+                    return;
+                }
+
                 const units = (state.inventory || []).filter(i => i.type === type && i.brand === brand).map(i => i.unit || '克');
                 const options = units.length ? units : FOOD_UNITS;
-                const currentValue = select.value;
+                const existingSelect = document.getElementById('food-unit');
+                const currentValue = existingSelect ? existingSelect.value : (state.tempFoodForm ? state.tempFoodForm.unit : '');
                 const sel = options.includes(currentValue) ? currentValue : options[0];
-                select.innerHTML = options.map(u => `<option value="${u}" ${sel === u ? 'selected' : ''}>${u}</option>`).join('');
-                if (state.tempFoodForm) state.tempFoodForm.unit = select.value;
+                container.innerHTML = `
+                    <select id="food-unit" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50">
+                        ${options.map(u => `<option value="${u}" ${sel === u ? 'selected' : ''}>${u}</option>`).join('')}
+                    </select>
+                `;
+                if (state.tempFoodForm) state.tempFoodForm.unit = sel;
             },
             saveFoodRecord: () => {
                 playClickSound();
@@ -1397,27 +1423,25 @@
                     App.addFoodHistoryEntry(type, brand, content);
                 }
 
+                const newRecord = { type, brand, content, amount, unit, water, date, time, rating, note };
+
                 if (state.editingFoodId) {
                     // 編輯紀錄：先把舊紀錄扣掉的庫存恢復回來，再依新內容重新扣除（品牌/數量/單位若有變動也一併處理）
                     const oldRecord = state.foodRecords.find(r => r.id === state.editingFoodId);
-                    if (oldRecord && oldRecord.type !== '飲水') {
-                        App.adjustInventory(oldRecord.brand, oldRecord.type, oldRecord.unit || '克', oldRecord.amount);
-                    }
+                    App.adjustInventoryForFoodRecord(oldRecord, 1);
                     state.foodRecords = state.foodRecords.map(r =>
                         r.id === state.editingFoodId
-                        ? { ...r, type, brand, content, amount, unit, water, date, time, rating, note }
+                        ? { ...r, ...newRecord }
                         : r
                     );
                     showToast("紀錄已更新");
                 } else {
                     // 新增紀錄
-                    state.foodRecords.unshift({ id: Date.now(), type, brand, content, amount, unit, water, date, time, rating, note });
+                    state.foodRecords.unshift({ id: Date.now(), ...newRecord });
                     showToast("已新增紀錄");
                 }
-                if (type !== '飲水') {
-                    // 依飲食紀錄消耗庫存，依「品牌+類型+單位」加總扣除，不區分品項名稱
-                    App.adjustInventory(brand, type, unit, -amount);
-                }
+                // 依飲食紀錄消耗庫存：濕糧固定扣 1 罐（不論克數），其他類型依品牌+類型+單位加總扣除
+                App.adjustInventoryForFoodRecord(newRecord, -1);
 
                 state.showAddFood = false;
                 state.editingFoodId = null;
@@ -1426,10 +1450,8 @@
             deleteFoodRecord: (id) => {
                 playClickSound();
                 const record = state.foodRecords.find(r => r.id === id);
-                if (record && record.type !== '飲水') {
-                    // 刪除紀錄時把扣掉的庫存恢復回來
-                    App.adjustInventory(record.brand, record.type, record.unit || '克', record.amount);
-                }
+                // 刪除紀錄時把扣掉的庫存恢復回來（濕糧固定還 1 罐，其他類型依原本的品牌+類型+單位還原）
+                App.adjustInventoryForFoodRecord(record, 1);
                 state.foodRecords = state.foodRecords.filter(r => r.id !== id);
                 render();
             },
@@ -2478,12 +2500,14 @@
                         </div>
 
                         <div>
-                            <label class="text-xs text-gray-400 font-semibold block mb-1.5">餵食數量</label>
+                            <label id="food-amount-label" class="text-xs text-gray-400 font-semibold block mb-1.5">餵食數量${fData.type === '濕糧' ? '（庫存固定以罐計算，扣 1 罐/次）' : ''}</label>
                             <div class="flex gap-2">
                                 <input id="food-amount" type="number" value="${fData.amount || ''}" placeholder="50" class="flex-1 min-w-0 text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50" />
-                                <select id="food-unit" class="w-20 flex-shrink-0 text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50">
+                                <div id="food-unit-container" class="w-20 flex-shrink-0">${fData.type === '濕糧' ? `
+                                <span class="block text-sm p-3 rounded-xl border border-gray-200 bg-gray-100 text-gray-500 text-center">克</span>` : `
+                                <select id="food-unit" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50">
                                     ${unitOptionsHtml(fData.unit, inventoryUnitsForBrand)}
-                                </select>
+                                </select>`}</div>
                             </div>
                         </div>
                     </div>
