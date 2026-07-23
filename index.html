@@ -91,7 +91,7 @@
         // ==========================================
 
         // 每次發版打 git tag 時，這裡也同步手動更新，設定頁最下方會顯示，方便肉眼確認目前是哪一版
-        const APP_VERSION = 'v2.1';
+        const APP_VERSION = 'v2.2';
 
         const initialLifeSettings = [
             { id: 'weight', label: '體重記錄', icon: 'scale', enabled:  true, autoReminder: true, remindDays: 30, baseDate: '' },
@@ -149,11 +149,12 @@
             tempLifePhoto: '', // 新增/編輯日常紀錄時，暫存尚未儲存的照片
 
             foodRecords: JSON.parse(JSON.stringify(initialFoodRecords)),
-            // 新增：依「乾糧/濕糧/點心」分開保存的品牌/品項輸入歷史（自動完成建議用，可個別刪除，與飲食紀錄本身脫鉤）
+            // 新增：依「乾糧/濕糧/點心/保養品」分開保存的品牌/品項輸入歷史（自動完成建議用，可個別刪除，與飲食紀錄本身脫鉤）
             foodInputHistory: {
                 '乾糧': { brands: ['皇家'], contents: ['成貓去毛球'] },
                 '濕糧': { brands: ['汪喵'], contents: ['鮭魚無膠主食罐'] },
-                '點心': { brands: ['CIAO'], contents: ['肉泥(鮪魚)'] }
+                '點心': { brands: ['CIAO'], contents: ['肉泥(鮪魚)'] },
+                '保養品': { brands: [], contents: [] }
             },
             showAddFood: false,
             editingFoodId: null, // 新增：目前正在編輯的紀錄 ID
@@ -196,6 +197,14 @@
 
         // 供嵌入 onclick="App.fn('...')" 這種單引號 JS 字串參數使用，需先跳脫反斜線與單引號，再做一次 HTML 跳脫
         const escapeJsAttr = (s) => escapeHtml(String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
+
+        // 新增：數量單位（飲食紀錄/待買清單/庫存共用），預設「克」以相容舊資料
+        const FOOD_UNITS = ['克', '罐', '個', '包'];
+        const unitOptionsHtml = (selected, list) => {
+            const options = (list && list.length) ? list : FOOD_UNITS;
+            const sel = options.includes(selected) ? selected : options[0];
+            return options.map(u => `<option value="${u}" ${sel === u ? 'selected' : ''}>${u}</option>`).join('');
+        };
 
         const calculateAge = (birthday) => {
             if (!birthday) return '未知';
@@ -309,12 +318,12 @@
 
         // 確保「依飲食類型分類的常用清單」結構完整，並相容沒有此欄位的舊資料 (改由既有飲食紀錄反推建立)
         const normalizeFoodInputHistory = (historyData, recordsForFallback) => {
-            const base = { '乾糧': { brands: [], contents: [] }, '濕糧': { brands: [], contents: [] }, '點心': { brands: [], contents: [] } };
+            const base = { '乾糧': { brands: [], contents: [] }, '濕糧': { brands: [], contents: [] }, '點心': { brands: [], contents: [] }, '保養品': { brands: [], contents: [] } };
             const isValid = historyData && typeof historyData === 'object' &&
-                ['乾糧', '濕糧', '點心'].some(t => historyData[t] && (Array.isArray(historyData[t].brands) || Array.isArray(historyData[t].contents)));
+                ['乾糧', '濕糧', '點心', '保養品'].some(t => historyData[t] && (Array.isArray(historyData[t].brands) || Array.isArray(historyData[t].contents)));
 
             if (isValid) {
-                ['乾糧', '濕糧', '點心'].forEach(t => {
+                ['乾糧', '濕糧', '點心', '保養品'].forEach(t => {
                     const entry = historyData[t] || {};
                     base[t] = {
                         brands: Array.isArray(entry.brands) ? entry.brands.filter(Boolean) : [],
@@ -909,25 +918,28 @@
                 const brandEl = document.getElementById('shop-item-brand');
                 const amountEl = document.getElementById('shop-item-amount');
                 const typeEl = document.getElementById('shop-item-type');
+                const unitEl = document.getElementById('shop-item-unit');
                 const brand = brandEl ? brandEl.value.trim() : '';
                 if (!brand) { showToast('請輸入品牌', true); return; }
                 const amount = amountEl ? (parseFloat(amountEl.value) || 0) : 0;
                 const type = typeEl ? typeEl.value : '濕糧';
                 if (!type) { showToast('請選擇種類', true); return; }
-                state.shoppingList.unshift({ id: Date.now(), name, brand, amount, type, note: '', link: '', imageData: '' });
+                const unit = unitEl ? unitEl.value : '克';
+                state.shoppingList.unshift({ id: Date.now(), name, brand, amount, unit, type, note: '', link: '', imageData: '' });
                 state.showAddShoppingItem = false;
                 render();
             },
-            // 新增：庫存依「品牌 + 乾糧/濕糧/點心類型」為單位記錄，增減庫存數量（該品牌+類型不存在時自動新增一筆）
-            adjustInventory: (brand, type, delta) => {
+            // 新增：庫存依「品牌 + 乾糧/濕糧/點心/保養品類型 + 單位」為單位記錄，增減庫存數量（該組合不存在時自動新增一筆）
+            adjustInventory: (brand, type, unit, delta) => {
                 const b = (brand || '').trim();
+                const u = unit || '克';
                 if (!b || !delta || !type) return;
                 if (!Array.isArray(state.inventory)) state.inventory = [];
-                const entry = state.inventory.find(i => i.brand === b && i.type === type);
+                const entry = state.inventory.find(i => i.brand === b && i.type === type && (i.unit || '克') === u);
                 if (entry) {
                     entry.amount = (entry.amount || 0) + delta;
                 } else {
-                    state.inventory.push({ brand: b, type, amount: delta });
+                    state.inventory.push({ brand: b, type, unit: u, amount: delta });
                 }
             },
             // 新增：點擊待買項目的勾選鈕，先跳出「是否確認購買」彈窗，而非直接勾選
@@ -949,9 +961,10 @@
                     const brand = (item.brand || '').trim();
                     const amount = parseFloat(item.amount) || 0;
                     const type = item.type || '濕糧';
+                    const unit = item.unit || '克';
                     if (brand && amount > 0) {
-                        App.adjustInventory(brand, type, amount);
-                        showToast(`已購買，${type} ${brand} 庫存 +${amount}g`);
+                        App.adjustInventory(brand, type, unit, amount);
+                        showToast(`已購買，${type} ${brand} 庫存 +${amount}${unit}`);
                     } else {
                         showToast('已購買');
                     }
@@ -968,35 +981,44 @@
                 if (!state.showAddInventory) state.editingInventoryEntry = null;
                 render();
             },
-            // 新增：點擊既有品牌庫存列，帶入表單直接編輯該筆（品牌+類型）的庫存量
-            editInventoryEntry: (brand, type) => {
+            // 新增：點擊既有品牌庫存列，帶入表單直接編輯該筆（品牌+類型+單位）的庫存量
+            editInventoryEntry: (brand, type, unit) => {
                 playClickSound();
-                state.editingInventoryEntry = { brand, type };
+                state.editingInventoryEntry = { brand, type, unit };
                 state.showAddInventory = true;
                 render();
             },
-            // 新增：儲存庫存表單 - 直接設定（覆蓋）該品牌+類型的庫存總量，而非累加
+            // 新增：儲存庫存表單 - 直接設定（覆蓋）該品牌+類型+單位的庫存總量，而非累加
             saveInventoryAmount: () => {
                 playClickSound();
                 const brandEl = document.getElementById('inv-brand');
                 const amountEl = document.getElementById('inv-amount');
                 const typeEl = document.getElementById('inv-type');
+                const unitEl = document.getElementById('inv-unit');
                 const brand = brandEl ? brandEl.value.trim() : '';
                 const amount = amountEl ? parseFloat(amountEl.value) : NaN;
                 const type = typeEl ? typeEl.value : '濕糧';
+                const unit = unitEl ? unitEl.value : '克';
                 if (!brand) { showToast('請輸入品牌', true); return; }
-                if (isNaN(amount)) { showToast('請輸入庫存克數', true); return; }
+                if (isNaN(amount)) { showToast('請輸入庫存數量', true); return; }
                 if (!Array.isArray(state.inventory)) state.inventory = [];
-                const entry = state.inventory.find(i => i.brand === brand && i.type === type);
-                if (entry) { entry.amount = amount; } else { state.inventory.push({ brand, type, amount }); }
+
+                // 編輯時如果把單位改掉了，先移除原本那筆（品牌+類型+舊單位），數量會轉移到新單位那筆
+                const editing = state.editingInventoryEntry;
+                if (editing && (editing.unit || '克') !== unit) {
+                    state.inventory = state.inventory.filter(i => !(i.brand === editing.brand && i.type === editing.type && (i.unit || '克') === (editing.unit || '克')));
+                }
+
+                const entry = state.inventory.find(i => i.brand === brand && i.type === type && (i.unit || '克') === unit);
+                if (entry) { entry.amount = amount; } else { state.inventory.push({ brand, type, unit, amount }); }
                 state.showAddInventory = false;
                 state.editingInventoryEntry = null;
                 showToast('已儲存庫存');
                 render();
             },
-            deleteInventoryEntry: (brand, type) => {
+            deleteInventoryEntry: (brand, type, unit) => {
                 playClickSound();
-                state.inventory = (state.inventory || []).filter(i => !(i.brand === brand && i.type === type));
+                state.inventory = (state.inventory || []).filter(i => !(i.brand === brand && i.type === type && (i.unit || '克') === unit));
                 render();
             },
             deleteShoppingItem: (id) => {
@@ -1015,11 +1037,13 @@
                         const b = document.getElementById('shop-detail-brand');
                         const a = document.getElementById('shop-detail-amount');
                         const t = document.getElementById('shop-detail-type');
+                        const u = document.getElementById('shop-detail-unit');
                         if (n) cur.note = n.value;
                         if (l) cur.link = l.value.trim();
                         if (b) cur.brand = b.value.trim();
                         if (a) cur.amount = parseFloat(a.value) || 0;
                         if (t) cur.type = t.value;
+                        if (u) cur.unit = u.value;
                     }
                 }
                 state.activeShoppingItemId = (state.activeShoppingItemId === id) ? null : id;
@@ -1041,11 +1065,13 @@
                     const l = document.getElementById('shop-detail-link');
                     const a = document.getElementById('shop-detail-amount');
                     const t = document.getElementById('shop-detail-type');
+                    const u = document.getElementById('shop-detail-unit');
                     if (n) item.note = n.value;
                     if (l) item.link = l.value.trim();
                     if (b) item.brand = b.value.trim();
                     if (a) item.amount = parseFloat(a.value) || 0;
                     if (t) item.type = t.value;
+                    if (u) item.unit = u.value;
                 }
                 state.activeShoppingItemId = null;
                 showToast('已儲存');
@@ -1239,7 +1265,7 @@
                     state.editingFoodId = null;
                     const d = new Date();
                     state.tempFoodForm = {
-                        type: '濕糧', brand: '', content: '', amount: '', water: '',
+                        type: '濕糧', brand: '', content: '', amount: '', unit: '克', water: '',
                         date: d.toISOString().split('T')[0],
                         time: d.toTimeString().slice(0, 5),
                         rating: 0
@@ -1299,6 +1325,8 @@
                     App.refreshFoodDatalists(type);
                     // 品牌下拉選單也要依新類型即時刷新，只列出該類型庫存裡有的品牌
                     App.refreshFoodBrandOptions(type);
+                    // 品牌變了，單位選單也要跟著刷新
+                    App.refreshFoodUnitOptions();
                 }
             },
             // 新增：切換飲食記錄類型時，即時刷新品牌下拉選單，只列出該類型庫存裡有的品牌
@@ -1321,6 +1349,26 @@
                 }
                 if (state.tempFoodForm) state.tempFoodForm.brand = select.value;
             },
+            // 新增：切換品牌下拉選單時觸發，更新暫存表單資料並刷新單位選單
+            handleFoodBrandChange: (brand) => {
+                if (state.tempFoodForm) state.tempFoodForm.brand = brand;
+                App.refreshFoodUnitOptions();
+            },
+            // 新增：依「目前類型 + 目前品牌」重新整理單位選單，只列出該品牌在庫存裡實際存在的單位
+            refreshFoodUnitOptions: () => {
+                const select = document.getElementById('food-unit');
+                const typeEl = document.getElementById('food-type');
+                const brandEl = document.getElementById('food-brand');
+                if (!select) return;
+                const type = typeEl ? typeEl.value : '';
+                const brand = brandEl ? brandEl.value : '';
+                const units = (state.inventory || []).filter(i => i.type === type && i.brand === brand).map(i => i.unit || '克');
+                const options = units.length ? units : FOOD_UNITS;
+                const currentValue = select.value;
+                const sel = options.includes(currentValue) ? currentValue : options[0];
+                select.innerHTML = options.map(u => `<option value="${u}" ${sel === u ? 'selected' : ''}>${u}</option>`).join('');
+                if (state.tempFoodForm) state.tempFoodForm.unit = select.value;
+            },
             saveFoodRecord: () => {
                 playClickSound();
                 const type = document.getElementById('food-type').value;
@@ -1333,6 +1381,7 @@
                 let brand = '補水 / 喝水';
                 let content = '乾淨飲用水';
                 let amount = 0;
+                let unit = '克';
                 let rating = 0;
 
                 if (type !== '飲水') {
@@ -1340,6 +1389,8 @@
                     if (!brand) { showToast('請選擇品牌（品牌需先在庫存頁面建立）', true); return; }
                     content = document.getElementById('food-content').value || '未填寫品項';
                     amount = parseFloat(document.getElementById('food-amount').value) || 0;
+                    const unitEl = document.getElementById('food-unit');
+                    unit = unitEl ? unitEl.value : '克';
                     rating = state.tempFoodForm ? state.tempFoodForm.rating : 0;
 
                     // 將本次輸入的品牌/品項加入「該類型」的常用清單，供下次自動完成使用
@@ -1347,25 +1398,25 @@
                 }
 
                 if (state.editingFoodId) {
-                    // 編輯紀錄：先把舊紀錄扣掉的庫存恢復回來，再依新內容重新扣除（品牌/克數若有變動也一併處理）
+                    // 編輯紀錄：先把舊紀錄扣掉的庫存恢復回來，再依新內容重新扣除（品牌/數量/單位若有變動也一併處理）
                     const oldRecord = state.foodRecords.find(r => r.id === state.editingFoodId);
                     if (oldRecord && oldRecord.type !== '飲水') {
-                        App.adjustInventory(oldRecord.brand, oldRecord.type, oldRecord.amount);
+                        App.adjustInventory(oldRecord.brand, oldRecord.type, oldRecord.unit || '克', oldRecord.amount);
                     }
                     state.foodRecords = state.foodRecords.map(r =>
                         r.id === state.editingFoodId
-                        ? { ...r, type, brand, content, amount, water, date, time, rating, note }
+                        ? { ...r, type, brand, content, amount, unit, water, date, time, rating, note }
                         : r
                     );
                     showToast("紀錄已更新");
                 } else {
                     // 新增紀錄
-                    state.foodRecords.unshift({ id: Date.now(), type, brand, content, amount, water, date, time, rating, note });
+                    state.foodRecords.unshift({ id: Date.now(), type, brand, content, amount, unit, water, date, time, rating, note });
                     showToast("已新增紀錄");
                 }
                 if (type !== '飲水') {
-                    // 依飲食紀錄消耗庫存，只依「品牌+類型」加總扣除，不區分品項名稱
-                    App.adjustInventory(brand, type, -amount);
+                    // 依飲食紀錄消耗庫存，依「品牌+類型+單位」加總扣除，不區分品項名稱
+                    App.adjustInventory(brand, type, unit, -amount);
                 }
 
                 state.showAddFood = false;
@@ -1377,7 +1428,7 @@
                 const record = state.foodRecords.find(r => r.id === id);
                 if (record && record.type !== '飲水') {
                     // 刪除紀錄時把扣掉的庫存恢復回來
-                    App.adjustInventory(record.brand, record.type, record.amount);
+                    App.adjustInventory(record.brand, record.type, record.unit || '克', record.amount);
                 }
                 state.foodRecords = state.foodRecords.filter(r => r.id !== id);
                 render();
@@ -2025,12 +2076,12 @@
                         ${state.foodRecords.length === 0 ? '<p class="text-gray-400 text-sm text-center py-4">無近期飲食紀錄</p>' :
                           state.foodRecords.slice(0,3).map(r => `
                             <div onclick="App.editFoodRecord(${r.id})" class="bg-gray-50/75 p-3.5 rounded-2xl border border-gray-100 flex items-center gap-3 cursor-pointer active:scale-[0.98] hover:bg-gray-100/70 transition-all">
-                                <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${r.type==='濕糧'?'bg-blue-50 text-blue-500': r.type==='點心'?'bg-pink-50 text-pink-500' : r.type==='飲水'?'bg-cyan-50 text-cyan-500':'bg-amber-50 text-amber-500'}">
-                                    <i data-lucide="${r.type==='濕糧'?'fish': r.type==='點心'?'star': r.type==='飲水'?'droplet':'bone'}" class="w-5 h-5"></i>
+                                <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${r.type==='濕糧'?'bg-blue-50 text-blue-500': r.type==='點心'?'bg-pink-50 text-pink-500' : r.type==='保養品'?'bg-purple-50 text-purple-500' : r.type==='飲水'?'bg-cyan-50 text-cyan-500':'bg-amber-50 text-amber-500'}">
+                                    <i data-lucide="${r.type==='濕糧'?'fish': r.type==='點心'?'star': r.type==='保養品'?'pill': r.type==='飲水'?'droplet':'bone'}" class="w-5 h-5"></i>
                                 </div>
                                 <div class="flex-1 min-w-0">
                                     <h4 class="font-semibold text-gray-800 text-sm truncate">${escapeHtml(r.brand)} • ${escapeHtml(r.content)}</h4>
-                                    <p class="text-xs text-gray-400 mt-1">${r.type} ${r.type!=='飲水'?`• ${r.amount}g`:''} ${r.water>0?`• 水+${r.water}ml`:''}</p>
+                                    <p class="text-xs text-gray-400 mt-1">${r.type} ${r.type!=='飲水'?`• ${r.amount}${r.unit || '克'}`:''} ${r.water>0?`• 水+${r.water}ml`:''}</p>
                                 </div>
                                 <span class="text-xs text-gray-400 flex-shrink-0">${r.date ? r.date.slice(5) : ''} ${r.time || ''}</span>
                                 <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-gray-300 flex-shrink-0"></i>
@@ -2273,22 +2324,24 @@
 
             const selectedMonthRecords = state.foodRecords.filter(r => r.date && r.date.startsWith(selectedMonth));
 
-            // 新增：歷史紀錄展開明細時，依「乾糧/濕糧/點心/飲水」分類分組顯示（各分類內仍保留原本的先後順序）
+            // 新增：歷史紀錄展開明細時，依「乾糧/濕糧/點心/保養品/飲水」分類分組顯示（各分類內仍保留原本的先後順序）
             const foodHistoryTypeMeta = {
                 '乾糧': { bg: 'bg-amber-50', text: 'text-amber-600', icon: 'bone' },
                 '濕糧': { bg: 'bg-blue-50', text: 'text-blue-600', icon: 'fish' },
                 '點心': { bg: 'bg-pink-50', text: 'text-pink-600', icon: 'star' },
+                '保養品': { bg: 'bg-purple-50', text: 'text-purple-600', icon: 'pill' },
                 '飲水': { bg: 'bg-cyan-50', text: 'text-cyan-600', icon: 'droplet' },
             };
             const foodHistoryTypeFilter = state.foodHistoryTypeFilter || '全部';
-            const groupedFoodHistory = ['乾糧', '濕糧', '點心', '飲水']
+            const groupedFoodHistory = ['乾糧', '濕糧', '點心', '保養品', '飲水']
                 .filter(t => foodHistoryTypeFilter === '全部' || t === foodHistoryTypeFilter)
                 .map(t => ({ type: t, meta: foodHistoryTypeMeta[t], records: selectedMonthRecords.filter(r => r.type === t) }))
                 .filter(g => g.records.length > 0);
-            
+
             const totalDry = selectedMonthRecords.filter(r=>r.type==='乾糧').reduce((acc, r) => acc + (r.amount || 0), 0);
             const totalWet = selectedMonthRecords.filter(r=>r.type==='濕糧').reduce((acc, r) => acc + (r.amount || 0), 0);
             const totalSnack = selectedMonthRecords.filter(r=>r.type==='點心').reduce((acc, r) => acc + (r.amount || 0), 0);
+            const totalCare = selectedMonthRecords.filter(r=>r.type==='保養品').reduce((acc, r) => acc + (r.amount || 0), 0);
             const totalWater = selectedMonthRecords.reduce((acc, r) => acc + (r.water || 0), 0);
             const topFoods = getMonthlyFoodRanking(state.foodRankingFilter, selectedMonth);
 
@@ -2339,7 +2392,7 @@
                 html += `
                 <div class="transition-all">
                     ${!isCurrentMonth ? `<p class="text-xs font-bold text-gray-400 mb-2 px-1 flex items-center gap-1"><i data-lucide="calendar" class="w-3 h-3"></i> ${monthLabel} 攝取量</p>` : ''}
-                    <div class="grid grid-cols-3 gap-3">
+                    <div class="grid grid-cols-2 gap-3">
                     <div onclick="App.setFoodHistoryTypeFilter('乾糧')" class="bg-amber-50 p-4 rounded-[1.5rem] border ${foodHistoryTypeFilter === '乾糧' ? 'border-amber-400 ring-2 ring-amber-300' : 'border-amber-100/60'} shadow-sm flex flex-col items-center relative overflow-hidden cursor-pointer active:scale-95 transition-all">
                         <div class="absolute -right-2 -bottom-2 opacity-[0.15] text-amber-500 pointer-events-none"><i data-lucide="bone" class="w-12 h-12"></i></div>
                         <p class="text-sm text-amber-600 font-bold mb-1 relative z-10">乾糧</p>
@@ -2355,6 +2408,11 @@
                         <p class="text-sm text-pink-600 font-bold mb-1 relative z-10">點心</p>
                         <p class="text-xl font-black text-pink-900 relative z-10">${totalSnack} <span class="text-xs font-bold text-pink-600/60">g</span></p>
                     </div>
+                    <div onclick="App.setFoodHistoryTypeFilter('保養品')" class="bg-purple-50 p-4 rounded-[1.5rem] border ${foodHistoryTypeFilter === '保養品' ? 'border-purple-400 ring-2 ring-purple-300' : 'border-purple-100/60'} shadow-sm flex flex-col items-center relative overflow-hidden cursor-pointer active:scale-95 transition-all">
+                        <div class="absolute -right-2 -bottom-2 opacity-[0.15] text-purple-500 pointer-events-none"><i data-lucide="pill" class="w-12 h-12"></i></div>
+                        <p class="text-sm text-purple-600 font-bold mb-1 relative z-10">保養品</p>
+                        <p class="text-xl font-black text-purple-900 relative z-10">${totalCare} <span class="text-xs font-bold text-purple-600/60">g</span></p>
+                    </div>
                     </div>
                 </div>`;
             }
@@ -2368,6 +2426,8 @@
                 const uniqueFoodContents = typeHistory.contents;
                 // 品牌下拉選單只列出「目前選擇的乾糧/濕糧/點心類型」在庫存裡有的品牌
                 const inventoryBrands = inventoryList.filter(i => i.type === currentFoodType).map(i => i.brand);
+                // 單位下拉選單只列出「目前品牌+類型」在庫存裡實際存在的單位
+                const inventoryUnitsForBrand = inventoryList.filter(i => i.type === currentFoodType && i.brand === fData.brand).map(i => i.unit || '克');
                 html += `
                 <div id="food-form-section" class="bg-white rounded-3xl p-6 shadow-lg border border-blue-50 space-y-5 fade-in">
                     <h3 class="font-bold text-gray-800 text-base flex items-center gap-1.5"><i data-lucide="utensils" class="w-5 h-5 text-blue-500"></i> ${state.editingFoodId ? '編輯餐點紀錄' : '新增餐點紀錄 / 記錄水分'}</h3>
@@ -2377,6 +2437,7 @@
                             <option value="濕糧" ${fData.type === '濕糧' ? 'selected' : ''}>濕糧 🥫</option>
                             <option value="乾糧" ${fData.type === '乾糧' ? 'selected' : ''}>乾糧 🫘</option>
                             <option value="點心" ${fData.type === '點心' ? 'selected' : ''}>點心 🍭</option>
+                            <option value="保養品" ${fData.type === '保養品' ? 'selected' : ''}>保養品 💊</option>
                             <option value="飲水" ${fData.type === '飲水' ? 'selected' : ''}>飲水 (直接喝水/水碗補水) 💧</option>
                         </select>
                     </div>
@@ -2389,7 +2450,7 @@
                                 <select id="food-brand" disabled class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-100 text-gray-400">
                                     <option value="">尚無庫存品牌，請先到待買清單「庫存」新增</option>
                                 </select>` : `
-                                <select id="food-brand" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50">
+                                <select id="food-brand" onchange="App.handleFoodBrandChange(this.value)" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50">
                                     <option value="" ${!fData.brand ? 'selected' : ''} disabled>請選擇品牌</option>
                                     ${inventoryBrands.map(b => `<option value="${escapeAttr(b)}" ${fData.brand === b ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('')}
                                     ${fData.brand && !inventoryBrands.includes(fData.brand) ? `<option value="${escapeAttr(fData.brand)}" selected>${escapeHtml(fData.brand)}（不在庫存）</option>` : ''}
@@ -2417,8 +2478,13 @@
                         </div>
 
                         <div>
-                            <label class="text-xs text-gray-400 font-semibold block mb-1.5">餵食克數 (g)</label>
-                            <input id="food-amount" type="number" value="${fData.amount || ''}" placeholder="50" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50" />
+                            <label class="text-xs text-gray-400 font-semibold block mb-1.5">餵食數量</label>
+                            <div class="flex gap-2">
+                                <input id="food-amount" type="number" value="${fData.amount || ''}" placeholder="50" class="flex-1 min-w-0 text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50" />
+                                <select id="food-unit" class="w-20 flex-shrink-0 text-sm p-3 rounded-xl border border-gray-200 outline-none bg-gray-50">
+                                    ${unitOptionsHtml(fData.unit, inventoryUnitsForBrand)}
+                                </select>
+                            </div>
                         </div>
                     </div>
 
@@ -2469,7 +2535,7 @@
                     <div class="flex flex-col mb-4">
                         <h3 class="font-bold text-gray-800 text-base flex items-center gap-1.5 mb-3"><i data-lucide="trophy" class="w-5 h-5 text-yellow-500"></i> ${isCurrentMonth ? '每月飲食排行榜' : `${monthLabel} 飲食排行榜`}</h3>
                         <div class="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                            ${['全部', '乾糧', '濕糧', '點心'].map(filter => `
+                            ${['全部', '乾糧', '濕糧', '點心', '保養品'].map(filter => `
                                 <button onclick="App.setFoodFilter('${filter}')" class="${state.foodRankingFilter === filter ? 'bg-blue-500 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'} px-4 py-1.5 rounded-full text-sm font-bold whitespace-nowrap transition-colors">
                                     ${filter}
                                 </button>
@@ -2518,7 +2584,7 @@
                                 <div class="flex-1 min-w-0">
                                     <h4 class="font-bold text-gray-800 text-sm truncate">${escapeHtml(r.brand)} • ${escapeHtml(r.content)}</h4>
                                     ${r.type !== '飲水' && r.rating > 0 ? `<div class="mt-1">${generateStarsHTML(r.rating, 12)}</div>` : ''}
-                                    <p class="text-xs text-gray-400 mt-1">${r.type} ${r.type!=='飲水'?`• ${r.amount}g`:''} ${r.water>0?`• 加水 ${r.water}ml`:''}</p>
+                                    <p class="text-xs text-gray-400 mt-1">${r.type} ${r.type!=='飲水'?`• ${r.amount}${r.unit || '克'}`:''} ${r.water>0?`• 加水 ${r.water}ml`:''}</p>
                                     <p class="text-[10px] text-gray-300 mt-1">${r.date} ${r.time}</p>
                                     ${r.note ? `<p class="text-xs text-gray-500 mt-1.5 bg-gray-50 rounded-lg px-2.5 py-1.5 flex items-start gap-1.5"><i data-lucide="file-text" class="w-3 h-3 text-gray-300 mt-0.5 flex-shrink-0"></i><span class="break-words">${escapeHtml(r.note)}</span></p>` : ''}
                                 </div>
@@ -2626,7 +2692,7 @@
                             <i data-lucide="${state.foodLayout.waterCard ? 'eye' : 'eye-off'}" class="w-4 h-4"></i>
                         </button>
                         <button onclick="App.toggleFoodLayoutItem('stats')" class="flex items-center justify-between p-3.5 rounded-2xl border text-left transition-all ${state.foodLayout.stats ? 'bg-blue-50/50 border-blue-200 text-blue-600' : 'bg-white border-gray-100 text-gray-400'}">
-                            <span class="text-sm font-bold">乾/濕/點心量</span>
+                            <span class="text-sm font-bold">乾/濕/點心/保養品量</span>
                             <i data-lucide="${state.foodLayout.stats ? 'eye' : 'eye-off'}" class="w-4 h-4"></i>
                         </button>
                         <button onclick="App.toggleFoodLayoutItem('ranking')" class="flex items-center justify-between p-3.5 rounded-2xl border text-left transition-all ${state.foodLayout.ranking ? 'bg-blue-50/50 border-blue-200 text-blue-600' : 'bg-white border-gray-100 text-gray-400'}">
@@ -2803,10 +2869,11 @@
             const shopTypeMeta = {
                 '乾糧': { bg: 'bg-amber-50', text: 'text-amber-600' },
                 '濕糧': { bg: 'bg-blue-50', text: 'text-blue-600' },
-                '點心': { bg: 'bg-pink-50', text: 'text-pink-600' }
+                '點心': { bg: 'bg-pink-50', text: 'text-pink-600' },
+                '保養品': { bg: 'bg-purple-50', text: 'text-purple-600' }
             };
-            const typeOptions = (selected) => ['乾糧', '濕糧', '點心'].map(t => `<option value="${t}" ${selected === t ? 'selected' : ''}>${t}</option>`).join('');
-            const groupedInventory = ['乾糧', '濕糧', '點心']
+            const typeOptions = (selected) => ['乾糧', '濕糧', '點心', '保養品'].map(t => `<option value="${t}" ${selected === t ? 'selected' : ''}>${t}</option>`).join('');
+            const groupedInventory = ['乾糧', '濕糧', '點心', '保養品']
                 .map(t => ({ type: t, meta: shopTypeMeta[t], entries: inventory.filter(i => i.type === t) }))
                 .filter(g => g.entries.length > 0);
 
@@ -2848,9 +2915,12 @@
                     <select id="shop-item-type" class="w-full p-3 rounded-xl border border-gray-200 text-sm outline-none bg-gray-50 focus:bg-white focus:border-green-400 transition-all">
                         ${typeOptions('濕糧')}
                     </select>
+                    <input id="shop-item-brand" type="text" placeholder="品牌" class="w-full p-3 rounded-xl border border-gray-200 text-sm outline-none bg-gray-50 focus:bg-white focus:border-green-400 transition-all" />
                     <div class="flex gap-2">
-                        <input id="shop-item-brand" type="text" placeholder="品牌" class="flex-1 min-w-0 p-3 rounded-xl border border-gray-200 text-sm outline-none bg-gray-50 focus:bg-white focus:border-green-400 transition-all" />
-                        <input id="shop-item-amount" type="number" placeholder="克數（選填）" class="flex-1 min-w-0 p-3 rounded-xl border border-gray-200 text-sm outline-none bg-gray-50 focus:bg-white focus:border-green-400 transition-all" />
+                        <input id="shop-item-amount" type="number" placeholder="數量（選填）" class="flex-1 min-w-0 p-3 rounded-xl border border-gray-200 text-sm outline-none bg-gray-50 focus:bg-white focus:border-green-400 transition-all" />
+                        <select id="shop-item-unit" class="w-20 flex-shrink-0 p-3 rounded-xl border border-gray-200 text-sm outline-none bg-gray-50 focus:bg-white focus:border-green-400 transition-all">
+                            ${unitOptionsHtml('克')}
+                        </select>
                     </div>
                     <button onclick="App.addShoppingItem()" class="w-full bg-green-500 text-white py-3 rounded-xl text-sm font-bold hover:bg-green-600 transition-colors">新增</button>
                 </div>` : ''}
@@ -2868,7 +2938,7 @@
                                 <button onclick="App.requestConfirmPurchase(${item.id})" class="w-6 h-6 rounded-full border-2 border-gray-300 flex-shrink-0 bg-white hover:border-green-400 transition-colors active:scale-90"></button>
                                 <div onclick="App.openShoppingDetail(${item.id})" class="flex-1 min-w-0 cursor-pointer">
                                     <span class="block text-sm font-semibold text-gray-800 truncate">${escapeHtml(item.name)}</span>
-                                    <span class="block text-[11px] text-gray-400 mt-0.5">${item.type || '濕糧'}${item.brand ? ' • ' + escapeHtml(item.brand) : ''}${item.amount ? ' • ' + item.amount + 'g' : ''}</span>
+                                    <span class="block text-[11px] text-gray-400 mt-0.5">${item.type || '濕糧'}${item.brand ? ' • ' + escapeHtml(item.brand) : ''}${item.amount ? ' • ' + item.amount + (item.unit || '克') : ''}</span>
                                 </div>
                                 <div class="flex items-center gap-1 flex-shrink-0">
                                     ${item.link ? '<i data-lucide="link" class="w-3.5 h-3.5 text-blue-400"></i>' : ''}
@@ -2890,14 +2960,20 @@
                                         ${typeOptions(item.type || '濕糧')}
                                     </select>
                                 </div>
+                                <div>
+                                    <label class="text-[10px] text-gray-400 font-bold block mb-1.5">品牌</label>
+                                    <input id="shop-detail-brand" type="text" placeholder="品牌" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-white focus:border-green-400 transition-all" value="${escapeHtml(item.brand || '')}" />
+                                </div>
                                 <div class="flex gap-2">
                                     <div class="flex-1 min-w-0">
-                                        <label class="text-[10px] text-gray-400 font-bold block mb-1.5">品牌</label>
-                                        <input id="shop-detail-brand" type="text" placeholder="品牌" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-white focus:border-green-400 transition-all" value="${escapeHtml(item.brand || '')}" />
+                                        <label class="text-[10px] text-gray-400 font-bold block mb-1.5">數量</label>
+                                        <input id="shop-detail-amount" type="number" placeholder="數量（選填）" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-white focus:border-green-400 transition-all" value="${item.amount || ''}" />
                                     </div>
-                                    <div class="flex-1 min-w-0">
-                                        <label class="text-[10px] text-gray-400 font-bold block mb-1.5">克數</label>
-                                        <input id="shop-detail-amount" type="number" placeholder="克數（選填）" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-white focus:border-green-400 transition-all" value="${item.amount || ''}" />
+                                    <div class="w-20 flex-shrink-0">
+                                        <label class="text-[10px] text-gray-400 font-bold block mb-1.5">單位</label>
+                                        <select id="shop-detail-unit" class="w-full text-sm p-3 rounded-xl border border-gray-200 outline-none bg-white focus:border-green-400 transition-all">
+                                            ${unitOptionsHtml(item.unit)}
+                                        </select>
                                     </div>
                                 </div>
                                 <div>
@@ -2938,12 +3014,17 @@
                 ` : viewMode === '庫存' ? `
                 ${state.showAddInventory ? `
                 <div class="bg-white rounded-3xl p-5 shadow-sm border border-green-100 fade-in space-y-2.5">
-                    <p class="text-xs text-gray-400 font-semibold">${state.editingInventoryEntry ? `編輯「${escapeHtml(state.editingInventoryEntry.type)} ${escapeHtml(state.editingInventoryEntry.brand)}」的庫存` : '新增品牌庫存（直接設定總量）'}</p>
+                    <p class="text-xs text-gray-400 font-semibold">${state.editingInventoryEntry ? `編輯「${escapeHtml(state.editingInventoryEntry.type)} ${escapeHtml(state.editingInventoryEntry.brand)}（${escapeHtml(state.editingInventoryEntry.unit || '克')}）」的庫存` : '新增品牌庫存（直接設定總量）'}</p>
                     <select id="inv-type" ${state.editingInventoryEntry ? 'disabled' : ''} class="w-full p-3 rounded-xl border border-gray-200 text-sm outline-none ${state.editingInventoryEntry ? 'bg-gray-100 text-gray-500' : 'bg-gray-50 focus:bg-white focus:border-green-400'} transition-all">
                         ${typeOptions(state.editingInventoryEntry ? state.editingInventoryEntry.type : '濕糧')}
                     </select>
                     <input id="inv-brand" type="text" placeholder="品牌" ${state.editingInventoryEntry ? 'readonly' : ''} class="w-full p-3 rounded-xl border border-gray-200 text-sm outline-none ${state.editingInventoryEntry ? 'bg-gray-100 text-gray-500' : 'bg-gray-50 focus:bg-white focus:border-green-400'} transition-all" value="${escapeHtml(state.editingInventoryEntry ? state.editingInventoryEntry.brand : '')}" />
-                    <input id="inv-amount" type="number" placeholder="庫存克數" class="w-full p-3 rounded-xl border border-gray-200 text-sm outline-none bg-gray-50 focus:bg-white focus:border-green-400 transition-all" value="${(() => { if (!state.editingInventoryEntry) return ''; const e = inventory.find(i => i.brand === state.editingInventoryEntry.brand && i.type === state.editingInventoryEntry.type); return e ? e.amount : ''; })()}" />
+                    <div class="flex gap-2">
+                        <input id="inv-amount" type="number" placeholder="庫存數量" class="flex-1 min-w-0 p-3 rounded-xl border border-gray-200 text-sm outline-none bg-gray-50 focus:bg-white focus:border-green-400 transition-all" value="${(() => { if (!state.editingInventoryEntry) return ''; const e = inventory.find(i => i.brand === state.editingInventoryEntry.brand && i.type === state.editingInventoryEntry.type && (i.unit || '克') === (state.editingInventoryEntry.unit || '克')); return e ? e.amount : ''; })()}" />
+                        <select id="inv-unit" class="w-20 flex-shrink-0 p-3 rounded-xl border border-gray-200 text-sm outline-none bg-gray-50 focus:bg-white focus:border-green-400 transition-all">
+                            ${unitOptionsHtml(state.editingInventoryEntry ? state.editingInventoryEntry.unit : '克')}
+                        </select>
+                    </div>
                     <button onclick="App.saveInventoryAmount()" class="w-full bg-green-500 text-white py-3 rounded-xl text-sm font-bold hover:bg-green-600 transition-colors">儲存</button>
                 </div>` : ''}
 
@@ -2959,11 +3040,11 @@
                             <span class="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full ${group.meta.bg} ${group.meta.text}">${group.type}</span>
                             ${group.entries.map(entry => `
                             <div class="flex items-center gap-3 p-3.5 rounded-2xl border border-gray-100 bg-gray-50/60">
-                                <div onclick="App.editInventoryEntry('${escapeJsAttr(entry.brand)}', '${entry.type}')" class="flex-1 min-w-0 cursor-pointer flex items-center justify-between gap-2">
+                                <div onclick="App.editInventoryEntry('${escapeJsAttr(entry.brand)}', '${entry.type}', '${entry.unit || '克'}')" class="flex-1 min-w-0 cursor-pointer flex items-center justify-between gap-2">
                                     <span class="text-sm font-semibold text-gray-800 truncate">${escapeHtml(entry.brand)}</span>
-                                    <span class="text-sm font-black flex-shrink-0 ${entry.amount < 0 ? 'text-red-500' : 'text-gray-700'}">${entry.amount}g</span>
+                                    <span class="text-sm font-black flex-shrink-0 ${entry.amount < 0 ? 'text-red-500' : 'text-gray-700'}">${entry.amount}${entry.unit || '克'}</span>
                                 </div>
-                                <button onclick="App.requestDelete('確定要刪除「${entry.type} ${escapeJsAttr(entry.brand)}」的庫存嗎？', () => App.deleteInventoryEntry('${escapeJsAttr(entry.brand)}', '${entry.type}'))" class="w-8 h-8 rounded-full flex items-center justify-center text-red-300 hover:text-red-400 hover:bg-red-50 transition-colors flex-shrink-0">
+                                <button onclick="App.requestDelete('確定要刪除「${entry.type} ${escapeJsAttr(entry.brand)}（${entry.unit || '克'}）」的庫存嗎？', () => App.deleteInventoryEntry('${escapeJsAttr(entry.brand)}', '${entry.type}', '${entry.unit || '克'}'))" class="w-8 h-8 rounded-full flex items-center justify-center text-red-300 hover:text-red-400 hover:bg-red-50 transition-colors flex-shrink-0">
                                     <i data-lucide="trash-2" class="w-4 h-4"></i>
                                 </button>
                             </div>
@@ -3113,7 +3194,7 @@
                 </div>
                 <h2 class="text-base font-black text-gray-800 mb-1">是否確認購買？</h2>
                 <p class="text-sm text-gray-500 mb-1">${escapeHtml(item.name)}</p>
-                ${brand && amount > 0 ? `<p class="text-xs text-gray-400 mb-4">確認後將計入庫存：${escapeHtml(brand)} +${amount}g</p>` : '<p class="text-xs text-gray-400 mb-4">未填寫品牌/克數，確認後僅從清單移除</p>'}
+                ${brand && amount > 0 ? `<p class="text-xs text-gray-400 mb-4">確認後將計入庫存：${escapeHtml(brand)} +${amount}${escapeHtml(item.unit || '克')}</p>` : '<p class="text-xs text-gray-400 mb-4">未填寫品牌/數量，確認後僅從清單移除</p>'}
                 <div class="flex gap-3">
                     <button onclick="App.cancelPurchase()" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-500 font-bold py-3 rounded-xl text-sm transition-colors">否</button>
                     <button onclick="App.confirmPurchase()" class="flex-1 bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl text-sm transition-colors shadow-md">確認</button>
@@ -3145,6 +3226,7 @@
                 '乾糧': { bg: 'bg-amber-50', text: 'text-amber-600', icon: 'bone' },
                 '濕糧': { bg: 'bg-blue-50', text: 'text-blue-600', icon: 'fish' },
                 '點心': { bg: 'bg-pink-50', text: 'text-pink-600', icon: 'star' },
+                '保養品': { bg: 'bg-purple-50', text: 'text-purple-600', icon: 'pill' },
                 '飲水': { bg: 'bg-cyan-50', text: 'text-cyan-600', icon: 'droplet' },
             };
             const meta = typeMeta[type] || typeMeta['乾糧'];
@@ -3174,7 +3256,7 @@
                         </div>
                         <div class="flex-1 min-w-0">
                             ${r.type !== '飲水' && r.rating > 0 ? `<div class="mb-1">${generateStarsHTML(r.rating, 12)}</div>` : ''}
-                            <p class="text-xs text-gray-400">${r.type} ${r.type!=='飲水'?`• ${r.amount}g`:''} ${r.water>0?`• 加水 ${r.water}ml`:''}</p>
+                            <p class="text-xs text-gray-400">${r.type} ${r.type!=='飲水'?`• ${r.amount}${r.unit || '克'}`:''} ${r.water>0?`• 加水 ${r.water}ml`:''}</p>
                             <p class="text-[10px] text-gray-300 mt-1">${r.date} ${r.time || ''}</p>
                             ${r.note ? `<p class="text-xs text-gray-500 mt-1.5 bg-white rounded-lg px-2.5 py-1.5 flex items-start gap-1.5"><i data-lucide="file-text" class="w-3 h-3 text-gray-300 mt-0.5 flex-shrink-0"></i><span class="break-words">${escapeHtml(r.note)}</span></p>` : ''}
                         </div>
