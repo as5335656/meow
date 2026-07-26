@@ -131,7 +131,7 @@
             tempPhotoUrl: '',
             photoPickTarget: 'profile', // 記錄這次選相片是要給「寵物頭像」還是「日常紀錄照片」，PICK_PHOTO 回傳時才知道要放哪裡
 
-            homeLayout: { profile: true, shortcuts: true, reminders: true, weightChart: true, recentDiet: true, recentLife: true, dietRanking: true },
+            homeLayout: { profile: true, shortcuts: true, reminders: true, weightChart: true, recentDiet: true, recentLife: true, dietRanking: true, careSchedule: true },
             foodLayout: { stats: true, waterCard: true, ranking: true, history: true },
             
             reminders: [{ id: 'manual-1', title: '預約年度健檢', targetDate: '2026-07-06', isManual: true }],
@@ -163,6 +163,11 @@
             foodRankDetail: null, // 新增：點擊排行榜項目時，記錄 { name, type, monthStr } 以顯示該項目的詳細紀錄彈窗
             foodSelectedMonth: '', // 新增：飲食歷史紀錄目前檢視的月份 (格式 YYYY-MM，空字串代表預設為當月)
             foodHistoryTypeFilter: '全部', // 新增：點擊乾糧/濕糧/點心攝取量卡片時，篩選下方歷史紀錄；預設不篩選
+
+            // 新增：保養品排程 —— 依「星期幾」設定固定要餵的保養品品牌（0=日...6=六，對應 JS Date.getDay()），
+            // 一直保留到使用者自己更改為止，不是針對特定日期。新增濕糧紀錄時會依紀錄當天是星期幾比對這裡的設定
+            careSchedule: { 0: '', 1: '', 2: '', 3: '', 4: '', 5: '', 6: '' },
+            editingCareScheduleDay: null, // 新增：目前正在編輯排程的星期幾（點擊該天格子時設定），null 代表沒有在編輯
 
             showBackupModal: false,
             backupType: 'export',
@@ -1437,6 +1442,24 @@
                     </select>
                 `;
             },
+            // ===== 保養品排程（首頁「近期飲食」下方，依星期幾固定要餵的保養品）=====
+            toggleCareScheduleDay: (dow) => {
+                playClickSound();
+                state.editingCareScheduleDay = (state.editingCareScheduleDay === dow) ? null : dow;
+                render();
+            },
+            saveCareScheduleDay: () => {
+                playClickSound();
+                const dow = state.editingCareScheduleDay;
+                if (dow === null || dow === undefined) return;
+                const sel = document.getElementById('care-schedule-brand-select');
+                const brand = sel ? sel.value : '';
+                if (!state.careSchedule) state.careSchedule = { 0: '', 1: '', 2: '', 3: '', 4: '', 5: '', 6: '' };
+                state.careSchedule[dow] = brand;
+                state.editingCareScheduleDay = null;
+                showToast(brand ? `已設定排程：${brand}` : '已清除排程');
+                render();
+            },
             saveFoodRecord: () => {
                 playClickSound();
                 const type = document.getElementById('food-type').value;
@@ -1495,6 +1518,17 @@
                     newRecord.careBrand = ''; newRecord.careContent = ''; newRecord.careAmount = 0; newRecord.careUnit = '';
                 }
 
+                // 依「保養品排程」檢查：這筆濕糧紀錄的日期是星期幾，若當天有排程但沒有記到對應的保養品品牌，跳出提醒
+                let scheduleNotice = '';
+                if (type === '濕糧' && date && state.careSchedule) {
+                    const [y, m, d] = date.split('-').map(Number);
+                    const dow = new Date(y, m - 1, d).getDay(); // 用年月日各別建構日期，避免時區造成星期幾誤判
+                    const scheduledBrand = state.careSchedule[dow];
+                    if (scheduledBrand && newRecord.careBrand !== scheduledBrand) {
+                        scheduleNotice = ` ⚠️ 記得要餵${scheduledBrand}`;
+                    }
+                }
+
                 if (state.editingFoodId) {
                     // 編輯紀錄：先把舊紀錄扣掉的庫存恢復回來（含舊的保養品部分），再依新內容重新扣除
                     const oldRecord = state.foodRecords.find(r => r.id === state.editingFoodId);
@@ -1504,11 +1538,11 @@
                         ? { ...r, ...newRecord }
                         : r
                     );
-                    showToast("紀錄已更新" + careNotice);
+                    showToast("紀錄已更新" + careNotice + scheduleNotice, !!scheduleNotice);
                 } else {
                     // 新增紀錄
                     state.foodRecords.unshift({ id: Date.now(), ...newRecord });
-                    showToast("已新增紀錄" + careNotice);
+                    showToast("已新增紀錄" + careNotice + scheduleNotice, !!scheduleNotice);
                 }
                 // 依飲食紀錄消耗庫存：濕糧固定扣 1 罐（不論克數），其他類型依品牌+類型+單位加總扣除；
                 // 若這筆濕糧紀錄有附加保養品，保養品庫存也會一併扣除
@@ -1928,6 +1962,7 @@
                         ...parsed,
                         homeLayout: { ...state.homeLayout, ...(parsed.homeLayout || {}) },
                         foodLayout: { ...state.foodLayout, ...(parsed.foodLayout || {}) },
+                        careSchedule: { ...state.careSchedule, ...(parsed.careSchedule || {}) },
                         petProfile: { ...state.petProfile, ...(parsed.petProfile || {}) },
                         reminders: Array.isArray(parsed.reminders) ? parsed.reminders : state.reminders,
                         lifeSettings: Array.isArray(parsed.lifeSettings) ? parsed.lifeSettings : state.lifeSettings,
@@ -2181,6 +2216,46 @@
                             </div>
                         `).join('')}
                     </div>
+                </div>`;
+            }
+
+            if(state.homeLayout.careSchedule) {
+                const careSchedule = state.careSchedule || {};
+                const scheduleBrands = Array.from(new Set((state.inventory || []).filter(i => i.type === '保養品').map(i => i.brand)));
+                const todayDow = new Date().getDay();
+                const weekDayDefs = [{ label: '一', dow: 1 }, { label: '二', dow: 2 }, { label: '三', dow: 3 }, { label: '四', dow: 4 }, { label: '五', dow: 5 }, { label: '六', dow: 6 }, { label: '日', dow: 0 }];
+                const editingDow = state.editingCareScheduleDay;
+                html += `
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-purple-50">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="font-bold text-gray-800 text-lg flex items-center gap-2"><i data-lucide="calendar-check" class="w-5 h-5 text-purple-500"></i> 保養品排程</h3>
+                        <span class="text-xs text-gray-400 font-semibold">點格子設定</span>
+                    </div>
+                    <div class="grid grid-cols-7 gap-1.5">
+                        ${weekDayDefs.map(w => {
+                            const brand = careSchedule[w.dow] || '';
+                            const isToday = w.dow === todayDow;
+                            return `
+                            <div class="flex flex-col items-center gap-1">
+                                <span class="text-[10px] font-bold ${isToday ? 'text-purple-600' : 'text-gray-400'}">${w.label}</span>
+                                <button onclick="App.toggleCareScheduleDay(${w.dow})" class="w-full aspect-square rounded-xl border ${editingDow === w.dow ? 'border-purple-400 ring-2 ring-purple-200' : isToday ? 'border-purple-200 bg-purple-50/60' : 'border-gray-100 bg-gray-50'} flex items-center justify-center p-1 active:scale-95 transition-all">
+                                    ${brand ? `<span class="text-[9px] font-bold text-purple-600 text-center break-all leading-tight">${escapeHtml(brand)}</span>` : `<i data-lucide="plus" class="w-3.5 h-3.5 text-gray-300"></i>`}
+                                </button>
+                            </div>`;
+                        }).join('')}
+                    </div>
+                    ${editingDow !== null && editingDow !== undefined ? `
+                    <div class="mt-4 p-3 bg-purple-50/50 rounded-xl border border-purple-100 fade-in">
+                        <label class="text-[10px] text-gray-400 font-semibold block mb-1.5">設定「星期${weekDayDefs.find(w => w.dow === editingDow).label}」要餵的保養品</label>
+                        <div class="flex gap-2">
+                            <select id="care-schedule-brand-select" class="flex-1 min-w-0 text-sm p-2.5 rounded-xl border border-gray-200 bg-white">
+                                <option value="">不排程</option>
+                                ${scheduleBrands.map(b => `<option value="${escapeHtml(b)}" ${careSchedule[editingDow] === b ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('')}
+                            </select>
+                            <button onclick="App.saveCareScheduleDay()" class="bg-purple-500 hover:bg-purple-600 text-white px-4 rounded-xl text-sm font-bold transition-colors">儲存</button>
+                        </div>
+                        ${scheduleBrands.length === 0 ? `<p class="text-[10px] text-gray-400 mt-1.5">尚無保養品庫存品牌，請先到「囤貨清單」的庫存頁面新增</p>` : ''}
+                    </div>` : ''}
                 </div>`;
             }
 
@@ -2793,7 +2868,7 @@
                 <div class="space-y-3 mb-6">
                     <h3 class="text-xs font-bold text-gray-400 tracking-wider">首頁版面顯示</h3>
                     <div class="grid grid-cols-2 gap-2">
-                        ${['profile:寵物檔案', 'shortcuts:快捷按鈕', 'reminders:近期提醒', 'weightChart:體重圖表', 'recentDiet:飲食歷史', 'recentLife:日常歷史', 'dietRanking:飲食排行'].map(item => {
+                        ${['profile:寵物檔案', 'shortcuts:快捷按鈕', 'reminders:近期提醒', 'weightChart:體重圖表', 'recentDiet:飲食歷史', 'careSchedule:保養品排程', 'recentLife:日常歷史', 'dietRanking:飲食排行'].map(item => {
                             const [key, label] = item.split(':');
                             const isActive = state.homeLayout[key];
                             return `
