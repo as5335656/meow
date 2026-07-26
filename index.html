@@ -91,7 +91,7 @@
         // ==========================================
 
         // 每次發版打 git tag 時，這裡也同步手動更新，設定頁最下方會顯示，方便肉眼確認目前是哪一版
-        const APP_VERSION = 'v2.3';
+        const APP_VERSION = 'v2.4';
 
         const initialLifeSettings = [
             { id: 'weight', label: '體重記錄', icon: 'scale', enabled:  true, autoReminder: true, remindDays: 30, baseDate: '' },
@@ -382,7 +382,7 @@
             if (filterType !== '全部') monthRecords = monthRecords.filter(r => r.type === filterType);
 
             const aggregated = monthRecords.reduce((acc, record) => {
-                if (record.type === '飲水') return acc;
+                if (record.type === '飲水' || record.type === '保養品') return acc; // 保養品不列入排行榜統計
                 const key = `${record.brand} - ${record.content}`;
                 if (!acc[key]) acc[key] = { name: key, totalAmount: 0, count: 0, type: record.type, totalRating: 0, ratingCount: 0 };
                 acc[key].totalAmount += (record.amount || 0);
@@ -951,6 +951,10 @@
                 } else {
                     App.adjustInventory(record.brand, record.type, record.unit || '克', sign * (record.amount || 0));
                 }
+                // 濕糧紀錄若有合併記錄保養品，保養品庫存也要一併增減
+                if (record.careBrand) {
+                    App.adjustInventory(record.careBrand, '保養品', record.careUnit || '克', sign * (record.careAmount || 0));
+                }
             },
             // 新增：點擊待買項目的勾選鈕，先跳出「是否確認購買」彈窗，而非直接勾選
             requestConfirmPurchase: (id) => {
@@ -1319,9 +1323,12 @@
                 const foodInputs = document.getElementById('food-detail-inputs');
                 const labelWater = document.getElementById('label-food-water');
                 const ratingDiv = document.getElementById('food-rating-container');
+                const alsoCareSection = document.getElementById('food-also-care-section');
                 if (!foodInputs) return;
 
                 if (state.tempFoodForm) state.tempFoodForm.type = type;
+                // 「同時記錄保養品」只在新增濕糧時才顯示，切到其他類型就先收起來
+                if (alsoCareSection) alsoCareSection.classList.toggle('hidden', type !== '濕糧');
 
                 if (type === '飲水') {
                     foodInputs.classList.add('hidden');
@@ -1395,6 +1402,41 @@
                 `;
                 if (state.tempFoodForm) state.tempFoodForm.unit = sel;
             },
+            // 新增：展開/收合「新增濕糧時同時記錄保養品」的子表單（直接操作 DOM，不整頁重繪，避免已輸入的內容被清空）
+            toggleAlsoCare: () => {
+                playClickSound();
+                const fields = document.getElementById('also-care-fields');
+                const sw = document.getElementById('also-care-switch');
+                if (!fields) return;
+                const willShow = fields.classList.contains('hidden');
+                fields.classList.toggle('hidden', !willShow);
+                if (state.tempFoodForm) state.tempFoodForm.alsoCare = willShow;
+                if (sw) {
+                    sw.classList.toggle('bg-purple-500', willShow);
+                    sw.classList.toggle('bg-gray-200', !willShow);
+                    const knob = sw.querySelector('span');
+                    if (knob) {
+                        knob.classList.toggle('translate-x-4', willShow);
+                        knob.classList.toggle('translate-x-1', !willShow);
+                    }
+                }
+            },
+            // 新增：切換「順便記錄的保養品」品牌時，單位選單只列出該品牌在庫存裡實際存在的單位
+            handleCareBrandChange: (brand) => {
+                if (state.tempFoodForm) state.tempFoodForm.careBrand = brand;
+                const container = document.getElementById('care-unit-container');
+                if (!container) return;
+                const units = (state.inventory || []).filter(i => i.type === '保養品' && i.brand === brand).map(i => i.unit || '克');
+                const options = units.length ? units : FOOD_UNITS;
+                const existingSelect = document.getElementById('care-unit');
+                const currentValue = existingSelect ? existingSelect.value : '';
+                const sel = options.includes(currentValue) ? currentValue : options[0];
+                container.innerHTML = `
+                    <select id="care-unit" class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white">
+                        ${options.map(u => `<option value="${u}" ${sel === u ? 'selected' : ''}>${u}</option>`).join('')}
+                    </select>
+                `;
+            },
             saveFoodRecord: () => {
                 playClickSound();
                 const type = document.getElementById('food-type').value;
@@ -1425,8 +1467,36 @@
 
                 const newRecord = { type, brand, content, amount, unit, water, date, time, rating, note };
 
+                // 新增/編輯濕糧紀錄時，若有勾選「同時記錄保養品」且已選好品牌，
+                // 保養品資訊直接附加在同一筆濕糧紀錄上（不再另外新增一筆紀錄），畫面上會合併顯示成同一張卡片
+                let careNotice = '';
+                if (type === '濕糧') {
+                    const careFields = document.getElementById('also-care-fields');
+                    const careFieldsVisible = careFields && !careFields.classList.contains('hidden');
+                    if (careFieldsVisible) {
+                        const careBrandEl = document.getElementById('care-brand');
+                        const careBrand = careBrandEl ? careBrandEl.value : '';
+                        if (careBrand) {
+                            const careContentEl = document.getElementById('care-content');
+                            newRecord.careBrand = careBrand;
+                            newRecord.careContent = (careContentEl ? careContentEl.value.trim() : '') || '未填寫品項';
+                            newRecord.careAmount = parseFloat(document.getElementById('care-amount').value) || 0;
+                            const careUnitEl = document.getElementById('care-unit');
+                            newRecord.careUnit = careUnitEl ? careUnitEl.value : '克';
+                            App.addFoodHistoryEntry('保養品', careBrand, newRecord.careContent);
+                            careNotice = '，並合併記錄保養品';
+                        } else {
+                            careNotice = '（保養品未選擇品牌，未一併記錄）';
+                        }
+                    }
+                }
+                // 若這次沒有勾選/沒有選品牌，確保不會殘留上一次編輯時附加的保養品欄位
+                if (!newRecord.careBrand) {
+                    newRecord.careBrand = ''; newRecord.careContent = ''; newRecord.careAmount = 0; newRecord.careUnit = '';
+                }
+
                 if (state.editingFoodId) {
-                    // 編輯紀錄：先把舊紀錄扣掉的庫存恢復回來，再依新內容重新扣除（品牌/數量/單位若有變動也一併處理）
+                    // 編輯紀錄：先把舊紀錄扣掉的庫存恢復回來（含舊的保養品部分），再依新內容重新扣除
                     const oldRecord = state.foodRecords.find(r => r.id === state.editingFoodId);
                     App.adjustInventoryForFoodRecord(oldRecord, 1);
                     state.foodRecords = state.foodRecords.map(r =>
@@ -1434,13 +1504,14 @@
                         ? { ...r, ...newRecord }
                         : r
                     );
-                    showToast("紀錄已更新");
+                    showToast("紀錄已更新" + careNotice);
                 } else {
                     // 新增紀錄
                     state.foodRecords.unshift({ id: Date.now(), ...newRecord });
-                    showToast("已新增紀錄");
+                    showToast("已新增紀錄" + careNotice);
                 }
-                // 依飲食紀錄消耗庫存：濕糧固定扣 1 罐（不論克數），其他類型依品牌+類型+單位加總扣除
+                // 依飲食紀錄消耗庫存：濕糧固定扣 1 罐（不論克數），其他類型依品牌+類型+單位加總扣除；
+                // 若這筆濕糧紀錄有附加保養品，保養品庫存也會一併扣除
                 App.adjustInventoryForFoodRecord(newRecord, -1);
 
                 state.showAddFood = false;
@@ -1450,7 +1521,7 @@
             deleteFoodRecord: (id) => {
                 playClickSound();
                 const record = state.foodRecords.find(r => r.id === id);
-                // 刪除紀錄時把扣掉的庫存恢復回來（濕糧固定還 1 罐，其他類型依原本的品牌+類型+單位還原）
+                // 刪除紀錄時把扣掉的庫存恢復回來（濕糧固定還 1 罐，其他類型依原本的品牌+類型+單位還原；若有附加保養品也一併還原）
                 App.adjustInventoryForFoodRecord(record, 1);
                 state.foodRecords = state.foodRecords.filter(r => r.id !== id);
                 render();
@@ -1998,7 +2069,7 @@
                         </button>
                         <button onclick="App.setTab('shop')" class="bg-[#4c5a6b] rounded-[1.65rem] py-6 px-2 text-white active:scale-95 transition-transform flex flex-col items-center justify-center gap-3">
                             <i data-lucide="shopping-cart" class="w-9 h-9" stroke-width="1.5"></i>
-                            <h3 class="text-base font-bold">待買清單</h3>
+                            <h3 class="text-base font-bold">囤貨清單</h3>
                         </button>
                     </div>
                 </div>`;
@@ -2346,7 +2417,8 @@
 
             const selectedMonthRecords = state.foodRecords.filter(r => r.date && r.date.startsWith(selectedMonth));
 
-            // 新增：歷史紀錄展開明細時，依「乾糧/濕糧/點心/保養品/飲水」分類分組顯示（各分類內仍保留原本的先後順序）
+            // 新增：歷史紀錄展開明細時，依「乾糧/濕糧/點心/飲水」分類分組顯示（各分類內仍保留原本的先後順序）
+            // 保養品不獨立成一組，紀錄時併入「濕糧」一起顯示（每筆紀錄仍依自己的類型顯示對應的圖示/顏色）
             const foodHistoryTypeMeta = {
                 '乾糧': { bg: 'bg-amber-50', text: 'text-amber-600', icon: 'bone' },
                 '濕糧': { bg: 'bg-blue-50', text: 'text-blue-600', icon: 'fish' },
@@ -2355,15 +2427,14 @@
                 '飲水': { bg: 'bg-cyan-50', text: 'text-cyan-600', icon: 'droplet' },
             };
             const foodHistoryTypeFilter = state.foodHistoryTypeFilter || '全部';
-            const groupedFoodHistory = ['乾糧', '濕糧', '點心', '保養品', '飲水']
+            const groupedFoodHistory = ['乾糧', '濕糧', '點心', '飲水']
                 .filter(t => foodHistoryTypeFilter === '全部' || t === foodHistoryTypeFilter)
-                .map(t => ({ type: t, meta: foodHistoryTypeMeta[t], records: selectedMonthRecords.filter(r => r.type === t) }))
+                .map(t => ({ type: t, meta: foodHistoryTypeMeta[t], records: selectedMonthRecords.filter(r => r.type === t || (t === '濕糧' && r.type === '保養品')) }))
                 .filter(g => g.records.length > 0);
 
             const totalDry = selectedMonthRecords.filter(r=>r.type==='乾糧').reduce((acc, r) => acc + (r.amount || 0), 0);
             const totalWet = selectedMonthRecords.filter(r=>r.type==='濕糧').reduce((acc, r) => acc + (r.amount || 0), 0);
             const totalSnack = selectedMonthRecords.filter(r=>r.type==='點心').reduce((acc, r) => acc + (r.amount || 0), 0);
-            const totalCare = selectedMonthRecords.filter(r=>r.type==='保養品').reduce((acc, r) => acc + (r.amount || 0), 0);
             const totalWater = selectedMonthRecords.reduce((acc, r) => acc + (r.water || 0), 0);
             const topFoods = getMonthlyFoodRanking(state.foodRankingFilter, selectedMonth);
 
@@ -2414,7 +2485,7 @@
                 html += `
                 <div class="transition-all">
                     ${!isCurrentMonth ? `<p class="text-xs font-bold text-gray-400 mb-2 px-1 flex items-center gap-1"><i data-lucide="calendar" class="w-3 h-3"></i> ${monthLabel} 攝取量</p>` : ''}
-                    <div class="grid grid-cols-2 gap-3">
+                    <div class="grid grid-cols-3 gap-3">
                     <div onclick="App.setFoodHistoryTypeFilter('乾糧')" class="bg-amber-50 p-4 rounded-[1.5rem] border ${foodHistoryTypeFilter === '乾糧' ? 'border-amber-400 ring-2 ring-amber-300' : 'border-amber-100/60'} shadow-sm flex flex-col items-center relative overflow-hidden cursor-pointer active:scale-95 transition-all">
                         <div class="absolute -right-2 -bottom-2 opacity-[0.15] text-amber-500 pointer-events-none"><i data-lucide="bone" class="w-12 h-12"></i></div>
                         <p class="text-sm text-amber-600 font-bold mb-1 relative z-10">乾糧</p>
@@ -2429,11 +2500,6 @@
                         <div class="absolute -right-2 -bottom-2 opacity-[0.15] text-pink-500 pointer-events-none"><i data-lucide="star" class="w-12 h-12"></i></div>
                         <p class="text-sm text-pink-600 font-bold mb-1 relative z-10">點心</p>
                         <p class="text-xl font-black text-pink-900 relative z-10">${totalSnack} <span class="text-xs font-bold text-pink-600/60">g</span></p>
-                    </div>
-                    <div onclick="App.setFoodHistoryTypeFilter('保養品')" class="bg-purple-50 p-4 rounded-[1.5rem] border ${foodHistoryTypeFilter === '保養品' ? 'border-purple-400 ring-2 ring-purple-300' : 'border-purple-100/60'} shadow-sm flex flex-col items-center relative overflow-hidden cursor-pointer active:scale-95 transition-all">
-                        <div class="absolute -right-2 -bottom-2 opacity-[0.15] text-purple-500 pointer-events-none"><i data-lucide="pill" class="w-12 h-12"></i></div>
-                        <p class="text-sm text-purple-600 font-bold mb-1 relative z-10">保養品</p>
-                        <p class="text-xl font-black text-purple-900 relative z-10">${totalCare} <span class="text-xs font-bold text-purple-600/60">g</span></p>
                     </div>
                     </div>
                 </div>`;
@@ -2450,6 +2516,11 @@
                 const inventoryBrands = inventoryList.filter(i => i.type === currentFoodType).map(i => i.brand);
                 // 單位下拉選單只列出「目前品牌+類型」在庫存裡實際存在的單位
                 const inventoryUnitsForBrand = inventoryList.filter(i => i.type === currentFoodType && i.brand === fData.brand).map(i => i.unit || '克');
+                // 新增濕糧紀錄時，可「順便」一起記錄一筆保養品，品牌一樣只列庫存裡有的
+                const careInventoryBrands = inventoryList.filter(i => i.type === '保養品').map(i => i.brand);
+                const careInventoryUnitsForBrand = inventoryList.filter(i => i.type === '保養品' && i.brand === fData.careBrand).map(i => i.unit || '克');
+                // 編輯已合併保養品的濕糧紀錄時，開關預設要是打開的（fData.alsoCare 沒明確設定過才用 careBrand 判斷）
+                const alsoCareInitial = fData.alsoCare !== undefined ? !!fData.alsoCare : !!fData.careBrand;
                 html += `
                 <div id="food-form-section" class="bg-white rounded-3xl p-6 shadow-lg border border-blue-50 space-y-5 fade-in">
                     <h3 class="font-bold text-gray-800 text-base flex items-center gap-1.5"><i data-lucide="utensils" class="w-5 h-5 text-blue-500"></i> ${state.editingFoodId ? '編輯餐點紀錄' : '新增餐點紀錄 / 記錄水分'}</h3>
@@ -2510,6 +2581,46 @@
                                 </select>`}</div>
                             </div>
                         </div>
+
+                        <!-- 新增濕糧紀錄時，可順便一起記錄一筆保養品，不用另外開一次表單 -->
+                        <div id="food-also-care-section" class="${fData.type === '濕糧' ? '' : 'hidden'}">
+                            <button type="button" onclick="App.toggleAlsoCare()" class="w-full flex items-center justify-between p-3 rounded-xl border border-purple-100 bg-purple-50/50 active:scale-[0.98] transition-transform">
+                                <span class="text-xs font-bold text-purple-600 flex items-center gap-1.5"><i data-lucide="pill" class="w-3.5 h-3.5"></i> 同時記錄保養品</span>
+                                <span id="also-care-switch" class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${alsoCareInitial ? 'bg-purple-500' : 'bg-gray-200'}">
+                                    <span class="inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${alsoCareInitial ? 'translate-x-4' : 'translate-x-1'}"></span>
+                                </span>
+                            </button>
+                            <div id="also-care-fields" class="${alsoCareInitial ? '' : 'hidden'} mt-3 space-y-3 p-3 bg-purple-50/30 rounded-xl border border-purple-100">
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label class="text-[10px] text-gray-400 font-semibold block mb-1">保養品品牌</label>
+                                        ${careInventoryBrands.length === 0 ? `
+                                        <select id="care-brand" disabled class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-gray-100 text-gray-400">
+                                            <option value="">尚無庫存品牌</option>
+                                        </select>` : `
+                                        <select id="care-brand" onchange="App.handleCareBrandChange(this.value)" class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white">
+                                            <option value="" ${!fData.careBrand ? 'selected' : ''} disabled>請選擇品牌</option>
+                                            ${careInventoryBrands.map(b => `<option value="${escapeAttr(b)}" ${fData.careBrand === b ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('')}
+                                        </select>`}
+                                    </div>
+                                    <div>
+                                        <label class="text-[10px] text-gray-400 font-semibold block mb-1">品項名稱</label>
+                                        <input id="care-content" type="text" value="${escapeHtml(fData.careContent || '')}" placeholder="例：關節保健粉" class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="text-[10px] text-gray-400 font-semibold block mb-1">數量</label>
+                                    <div class="flex gap-2">
+                                        <input id="care-amount" type="number" value="${fData.careAmount || ''}" placeholder="1" class="flex-1 min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white" />
+                                        <div id="care-unit-container" class="w-16 flex-shrink-0">
+                                            <select id="care-unit" class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white">
+                                                ${unitOptionsHtml(fData.careUnit, careInventoryUnitsForBrand)}
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- 喜愛程度評分區塊 (更新為滑桿與半星支援) -->
@@ -2559,7 +2670,7 @@
                     <div class="flex flex-col mb-4">
                         <h3 class="font-bold text-gray-800 text-base flex items-center gap-1.5 mb-3"><i data-lucide="trophy" class="w-5 h-5 text-yellow-500"></i> ${isCurrentMonth ? '每月飲食排行榜' : `${monthLabel} 飲食排行榜`}</h3>
                         <div class="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                            ${['全部', '乾糧', '濕糧', '點心', '保養品'].map(filter => `
+                            ${['全部', '乾糧', '濕糧', '點心'].map(filter => `
                                 <button onclick="App.setFoodFilter('${filter}')" class="${state.foodRankingFilter === filter ? 'bg-blue-500 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'} px-4 py-1.5 rounded-full text-sm font-bold whitespace-nowrap transition-colors">
                                     ${filter}
                                 </button>
@@ -2600,16 +2711,17 @@
                                     <span class="opacity-60 font-semibold">・${group.records.length} 筆</span>
                                 </span>
                             </div>
-                            ${group.records.map(r => `
+                            ${group.records.map(r => { const rMeta = foodHistoryTypeMeta[r.type] || group.meta; return `
                             <div class="bg-white p-4 rounded-2xl border border-gray-100 flex items-center gap-3">
-                                <div class="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 ${group.meta.bg} ${group.meta.text}">
-                                    <i data-lucide="${group.meta.icon}"></i>
+                                <div class="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 ${rMeta.bg} ${rMeta.text}">
+                                    <i data-lucide="${rMeta.icon}"></i>
                                 </div>
                                 <div class="flex-1 min-w-0">
                                     <h4 class="font-bold text-gray-800 text-sm truncate">${escapeHtml(r.brand)} • ${escapeHtml(r.content)}</h4>
                                     ${r.type !== '飲水' && r.rating > 0 ? `<div class="mt-1">${generateStarsHTML(r.rating, 12)}</div>` : ''}
                                     <p class="text-xs text-gray-400 mt-1">${r.type} ${r.type!=='飲水'?`• ${r.amount}${r.unit || '克'}`:''} ${r.water>0?`• 加水 ${r.water}ml`:''}</p>
                                     <p class="text-[10px] text-gray-300 mt-1">${r.date} ${r.time}</p>
+                                    ${r.careBrand ? `<div class="mt-1.5 flex items-center gap-1.5 text-xs text-purple-600 font-semibold bg-purple-50 rounded-lg px-2.5 py-1.5"><i data-lucide="pill" class="w-3.5 h-3.5 flex-shrink-0"></i><span class="truncate">${escapeHtml(r.careBrand)} • ${escapeHtml(r.careContent)}${r.careAmount ? ` (${r.careAmount}${r.careUnit || '克'})` : ''}</span></div>` : ''}
                                     ${r.note ? `<p class="text-xs text-gray-500 mt-1.5 bg-gray-50 rounded-lg px-2.5 py-1.5 flex items-start gap-1.5"><i data-lucide="file-text" class="w-3 h-3 text-gray-300 mt-0.5 flex-shrink-0"></i><span class="break-words">${escapeHtml(r.note)}</span></p>` : ''}
                                 </div>
                                 <div class="flex flex-col gap-1 flex-shrink-0">
@@ -2621,7 +2733,7 @@
                                     </button>
                                 </div>
                             </div>
-                            `).join('')}
+                            `; }).join('')}
                         </div>
                     `).join('')}
                     `}
@@ -2716,7 +2828,7 @@
                             <i data-lucide="${state.foodLayout.waterCard ? 'eye' : 'eye-off'}" class="w-4 h-4"></i>
                         </button>
                         <button onclick="App.toggleFoodLayoutItem('stats')" class="flex items-center justify-between p-3.5 rounded-2xl border text-left transition-all ${state.foodLayout.stats ? 'bg-blue-50/50 border-blue-200 text-blue-600' : 'bg-white border-gray-100 text-gray-400'}">
-                            <span class="text-sm font-bold">乾/濕/點心/保養品量</span>
+                            <span class="text-sm font-bold">乾/濕/點心量</span>
                             <i data-lucide="${state.foodLayout.stats ? 'eye' : 'eye-off'}" class="w-4 h-4"></i>
                         </button>
                         <button onclick="App.toggleFoodLayoutItem('ranking')" class="flex items-center justify-between p-3.5 rounded-2xl border text-left transition-all ${state.foodLayout.ranking ? 'bg-blue-50/50 border-blue-200 text-blue-600' : 'bg-white border-gray-100 text-gray-400'}">
@@ -3282,6 +3394,7 @@
                             ${r.type !== '飲水' && r.rating > 0 ? `<div class="mb-1">${generateStarsHTML(r.rating, 12)}</div>` : ''}
                             <p class="text-xs text-gray-400">${r.type} ${r.type!=='飲水'?`• ${r.amount}${r.unit || '克'}`:''} ${r.water>0?`• 加水 ${r.water}ml`:''}</p>
                             <p class="text-[10px] text-gray-300 mt-1">${r.date} ${r.time || ''}</p>
+                            ${r.careBrand ? `<div class="mt-1.5 flex items-center gap-1.5 text-xs text-purple-600 font-semibold bg-purple-50 rounded-lg px-2.5 py-1.5"><i data-lucide="pill" class="w-3.5 h-3.5 flex-shrink-0"></i><span class="truncate">${escapeHtml(r.careBrand)} • ${escapeHtml(r.careContent)}${r.careAmount ? ` (${r.careAmount}${r.careUnit || '克'})` : ''}</span></div>` : ''}
                             ${r.note ? `<p class="text-xs text-gray-500 mt-1.5 bg-white rounded-lg px-2.5 py-1.5 flex items-start gap-1.5"><i data-lucide="file-text" class="w-3 h-3 text-gray-300 mt-0.5 flex-shrink-0"></i><span class="break-words">${escapeHtml(r.note)}</span></p>` : ''}
                         </div>
                         <div class="flex flex-col gap-1 flex-shrink-0">
