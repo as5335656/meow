@@ -92,7 +92,7 @@
         // ==========================================
 
         // 每次發版打 git tag 時，這裡也同步手動更新，設定頁最下方會顯示，方便肉眼確認目前是哪一版
-        const APP_VERSION = 'v2.7';
+        const APP_VERSION = 'v2.8';
 
         const initialLifeSettings = [
             { id: 'weight', label: '體重記錄', icon: 'scale', enabled:  true, autoReminder: true, remindDays: 30, baseDate: '' },
@@ -1041,6 +1041,11 @@
                 state.showAddInventory = true;
                 render();
             },
+            // 新增：切換庫存新增表單的類型時，品牌輸入框的文字提示要跟著換（保養品用「名稱」，其他維持「品牌」）
+            handleInvTypeChange: (type) => {
+                const input = document.getElementById('inv-brand');
+                if (input) input.placeholder = type === '保養品' ? '名稱' : '品牌';
+            },
             // 新增：儲存庫存表單 - 直接設定（覆蓋）該品牌+類型+單位的庫存總量，而非累加
             saveInventoryAmount: () => {
                 playClickSound();
@@ -1474,7 +1479,7 @@
                 if (units.length === 0) {
                     container.innerHTML = `
                         <select id="care-unit" disabled class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-gray-100 text-gray-400">
-                            <option value="">先選品牌</option>
+                            <option value="">先選名稱</option>
                         </select>
                     `;
                     return;
@@ -1489,21 +1494,17 @@
             addCareItem: () => {
                 playClickSound();
                 const brandEl = document.getElementById('care-brand');
-                const contentEl = document.getElementById('care-content');
                 const amountEl = document.getElementById('care-amount');
                 const unitEl = document.getElementById('care-unit');
                 const brand = brandEl ? brandEl.value : '';
-                if (!brand) { showToast('請選擇保養品品牌', true); return; }
-                const content = (contentEl ? contentEl.value.trim() : '') || '未填寫品項';
+                if (!brand) { showToast('請選擇保養品名稱', true); return; }
                 const amount = amountEl ? (parseFloat(amountEl.value) || 0) : 0;
                 const unit = unitEl ? unitEl.value : '';
                 if (!state.tempFoodForm) return;
                 if (!Array.isArray(state.tempFoodForm.careItems)) state.tempFoodForm.careItems = [];
-                state.tempFoodForm.careItems.push({ brand, content, amount, unit });
-                App.addFoodHistoryEntry('保養品', brand, content);
+                state.tempFoodForm.careItems.push({ brand, amount, unit });
                 // 清空小表單，準備繼續新增下一筆
                 if (brandEl) brandEl.value = '';
-                if (contentEl) contentEl.value = '';
                 if (amountEl) amountEl.value = '';
                 App.handleCareBrandChange('');
                 App.refreshCareItemsList();
@@ -2813,22 +2814,16 @@
                                 <div id="care-items-list" class="flex flex-wrap gap-1.5">
                                     ${renderCareItemsChips(careItemsList)}
                                 </div>
-                                <div class="grid grid-cols-2 gap-3">
-                                    <div>
-                                        <label class="text-[10px] text-gray-400 font-semibold block mb-1">保養品品牌</label>
-                                        ${careInventoryBrands.length === 0 ? `
-                                        <select id="care-brand" disabled class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-gray-100 text-gray-400">
-                                            <option value="">尚無庫存品牌</option>
-                                        </select>` : `
-                                        <select id="care-brand" onchange="App.handleCareBrandChange(this.value)" class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white">
-                                            <option value="" selected disabled>請選擇品牌</option>
-                                            ${careInventoryBrands.map(b => `<option value="${escapeAttr(b)}">${escapeHtml(b)}</option>`).join('')}
-                                        </select>`}
-                                    </div>
-                                    <div>
-                                        <label class="text-[10px] text-gray-400 font-semibold block mb-1">品項名稱</label>
-                                        <input id="care-content" type="text" placeholder="例：關節保健粉" class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white" />
-                                    </div>
+                                <div>
+                                    <label class="text-[10px] text-gray-400 font-semibold block mb-1">名稱</label>
+                                    ${careInventoryBrands.length === 0 ? `
+                                    <select id="care-brand" disabled class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-gray-100 text-gray-400">
+                                        <option value="">尚無庫存品項</option>
+                                    </select>` : `
+                                    <select id="care-brand" onchange="App.handleCareBrandChange(this.value)" class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white">
+                                        <option value="" selected disabled>請選擇名稱</option>
+                                        ${careInventoryBrands.map(b => `<option value="${escapeAttr(b)}">${escapeHtml(b)}</option>`).join('')}
+                                    </select>`}
                                 </div>
                                 <div>
                                     <label class="text-[10px] text-gray-400 font-semibold block mb-1">數量</label>
@@ -2836,7 +2831,7 @@
                                         <input id="care-amount" type="number" placeholder="1" class="flex-1 min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white" />
                                         <div id="care-unit-container" class="w-16 flex-shrink-0">
                                             <select id="care-unit" disabled class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-gray-100 text-gray-400">
-                                                <option value="">先選品牌</option>
+                                                <option value="">先選名稱</option>
                                             </select>
                                         </div>
                                     </div>
@@ -3374,10 +3369,10 @@
                 ${state.showAddInventory ? `
                 <div class="bg-white rounded-3xl p-5 shadow-sm border border-green-100 fade-in space-y-2.5">
                     <p class="text-xs text-gray-400 font-semibold">${state.editingInventoryEntry ? `編輯「${escapeHtml(state.editingInventoryEntry.type)} ${escapeHtml(state.editingInventoryEntry.brand)}（${escapeHtml(state.editingInventoryEntry.unit || '克')}）」的庫存` : '新增品牌庫存（直接設定總量）'}</p>
-                    <select id="inv-type" ${state.editingInventoryEntry ? 'disabled' : ''} class="w-full p-3 rounded-xl border border-gray-200 text-sm outline-none ${state.editingInventoryEntry ? 'bg-gray-100 text-gray-500' : 'bg-gray-50 focus:bg-white focus:border-green-400'} transition-all">
+                    <select id="inv-type" onchange="App.handleInvTypeChange(this.value)" ${state.editingInventoryEntry ? 'disabled' : ''} class="w-full p-3 rounded-xl border border-gray-200 text-sm outline-none ${state.editingInventoryEntry ? 'bg-gray-100 text-gray-500' : 'bg-gray-50 focus:bg-white focus:border-green-400'} transition-all">
                         ${typeOptions(state.editingInventoryEntry ? state.editingInventoryEntry.type : '濕糧')}
                     </select>
-                    <input id="inv-brand" type="text" placeholder="品牌" ${state.editingInventoryEntry ? 'readonly' : ''} class="w-full p-3 rounded-xl border border-gray-200 text-sm outline-none ${state.editingInventoryEntry ? 'bg-gray-100 text-gray-500' : 'bg-gray-50 focus:bg-white focus:border-green-400'} transition-all" value="${escapeHtml(state.editingInventoryEntry ? state.editingInventoryEntry.brand : '')}" />
+                    <input id="inv-brand" type="text" placeholder="${(state.editingInventoryEntry ? state.editingInventoryEntry.type : '濕糧') === '保養品' ? '名稱' : '品牌'}" ${state.editingInventoryEntry ? 'readonly' : ''} class="w-full p-3 rounded-xl border border-gray-200 text-sm outline-none ${state.editingInventoryEntry ? 'bg-gray-100 text-gray-500' : 'bg-gray-50 focus:bg-white focus:border-green-400'} transition-all" value="${escapeHtml(state.editingInventoryEntry ? state.editingInventoryEntry.brand : '')}" />
                     <div class="flex gap-2">
                         <input id="inv-amount" type="number" placeholder="庫存數量" class="flex-1 min-w-0 p-3 rounded-xl border border-gray-200 text-sm outline-none bg-gray-50 focus:bg-white focus:border-green-400 transition-all" value="${(() => { if (!state.editingInventoryEntry) return ''; const e = inventory.find(i => i.brand === state.editingInventoryEntry.brand && i.type === state.editingInventoryEntry.type && (i.unit || '克') === (state.editingInventoryEntry.unit || '克')); return e ? e.amount : ''; })()}" />
                         <select id="inv-unit" class="w-20 flex-shrink-0 p-3 rounded-xl border border-gray-200 text-sm outline-none bg-gray-50 focus:bg-white focus:border-green-400 transition-all">
