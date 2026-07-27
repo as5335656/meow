@@ -77,6 +77,7 @@
         <div id="food-rank-detail-modal" class="fixed inset-0 bg-black/40 z-50 hidden items-center justify-center fade-in p-4"></div>
         <div id="confirm-purchase-modal" class="fixed inset-0 bg-black/40 z-50 hidden items-center justify-center fade-in p-4"></div>
         <div id="confirm-delete-modal" class="fixed inset-0 bg-black/40 z-50 hidden items-center justify-center fade-in p-4"></div>
+        <div id="confirm-care-schedule-modal" class="fixed inset-0 bg-black/40 z-50 hidden items-center justify-center fade-in p-4"></div>
 
         <!-- Toast 通知 -->
         <div id="toast" class="fixed top-10 left-1/2 transform -translate-x-1/2 px-4 py-2 rounded-full text-sm shadow-xl z-[100] transition-all duration-300 opacity-0 pointer-events-none -translate-y-5 flex items-center gap-2"></div>
@@ -91,7 +92,7 @@
         // ==========================================
 
         // 每次發版打 git tag 時，這裡也同步手動更新，設定頁最下方會顯示，方便肉眼確認目前是哪一版
-        const APP_VERSION = 'v2.4';
+        const APP_VERSION = 'v2.5';
 
         const initialLifeSettings = [
             { id: 'weight', label: '體重記錄', icon: 'scale', enabled:  true, autoReminder: true, remindDays: 30, baseDate: '' },
@@ -168,6 +169,8 @@
             // 一直保留到使用者自己更改為止，不是針對特定日期。新增濕糧紀錄時會依紀錄當天是星期幾比對這裡的設定
             careSchedule: { 0: '', 1: '', 2: '', 3: '', 4: '', 5: '', 6: '' },
             editingCareScheduleDay: null, // 新增：目前正在編輯排程的星期幾（點擊該天格子時設定），null 代表沒有在編輯
+            pendingFoodRecord: null, // 新增：保養品排程對不上時，暫存尚未真正儲存的飲食紀錄，等使用者確認彈窗選擇後才寫入
+            pendingCareScheduleBrand: null, // 新增：保養品排程確認彈窗要顯示的「當天應該要餵的品牌」
 
             showBackupModal: false,
             backupType: 'export',
@@ -463,6 +466,8 @@
                 showAddPocketItem: false,
                 activePocketItemId: null,
                 tempPocketImage: '',
+                pendingFoodRecord: null,
+                pendingCareScheduleBrand: null,
                 confirmDeleteAction: null,
                 foodRankDetail: null,
                 foodHistoryTypeFilter: '全部',
@@ -1427,18 +1432,27 @@
                 }
             },
             // 新增：切換「順便記錄的保養品」品牌時，單位選單只列出該品牌在庫存裡實際存在的單位
+            // 選品牌前不預設顯示「克」，避免誤以為克數才是主要單位；選了品牌才會顯示庫存實際對應的單位
             handleCareBrandChange: (brand) => {
                 if (state.tempFoodForm) state.tempFoodForm.careBrand = brand;
                 const container = document.getElementById('care-unit-container');
                 if (!container) return;
                 const units = (state.inventory || []).filter(i => i.type === '保養品' && i.brand === brand).map(i => i.unit || '克');
-                const options = units.length ? units : FOOD_UNITS;
+                if (units.length === 0) {
+                    container.innerHTML = `
+                        <select id="care-unit" disabled class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-gray-100 text-gray-400">
+                            <option value="">先選品牌</option>
+                        </select>
+                    `;
+                    if (state.tempFoodForm) state.tempFoodForm.careUnit = '';
+                    return;
+                }
                 const existingSelect = document.getElementById('care-unit');
                 const currentValue = existingSelect ? existingSelect.value : '';
-                const sel = options.includes(currentValue) ? currentValue : options[0];
+                const sel = units.includes(currentValue) ? currentValue : units[0];
                 container.innerHTML = `
                     <select id="care-unit" class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white">
-                        ${options.map(u => `<option value="${u}" ${sel === u ? 'selected' : ''}>${u}</option>`).join('')}
+                        ${units.map(u => `<option value="${u}" ${sel === u ? 'selected' : ''}>${u}</option>`).join('')}
                     </select>
                 `;
             },
@@ -1518,17 +1532,32 @@
                     newRecord.careBrand = ''; newRecord.careContent = ''; newRecord.careAmount = 0; newRecord.careUnit = '';
                 }
 
-                // 依「保養品排程」檢查：這筆濕糧紀錄的日期是星期幾，若當天有排程但沒有記到對應的保養品品牌，跳出提醒
-                let scheduleNotice = '';
+                // 依「保養品排程」檢查：這筆濕糧紀錄的日期是星期幾，若當天有排程但沒有記到對應的保養品品牌，
+                // 先跳出確認彈窗讓使用者決定要回去補記錄還是直接繼續儲存，而不是存完才被動提示
                 if (type === '濕糧' && date && state.careSchedule) {
                     const [y, m, d] = date.split('-').map(Number);
                     const dow = new Date(y, m - 1, d).getDay(); // 用年月日各別建構日期，避免時區造成星期幾誤判
                     const scheduledBrand = state.careSchedule[dow];
                     if (scheduledBrand && newRecord.careBrand !== scheduledBrand) {
-                        scheduleNotice = ` ⚠️ 記得要餵${scheduledBrand}`;
+                        // 當天如果已經有其他紀錄記過這個排程品牌了（不論是獨立的保養品紀錄，或合併在別的濕糧紀錄裡），就不用再問一次
+                        const alreadyRecordedToday = state.foodRecords.some(r =>
+                            r.id !== state.editingFoodId &&
+                            r.date === date &&
+                            (r.careBrand === scheduledBrand || (r.type === '保養品' && r.brand === scheduledBrand))
+                        );
+                        if (!alreadyRecordedToday) {
+                            state.pendingFoodRecord = newRecord;
+                            state.pendingCareScheduleBrand = scheduledBrand;
+                            render();
+                            return;
+                        }
                     }
                 }
 
+                App.commitFoodRecord(newRecord, careNotice);
+            },
+            // 新增：實際寫入飲食紀錄、增減庫存，抽出來讓「保養品排程確認彈窗」的確認/直接儲存都能共用
+            commitFoodRecord: (newRecord, careNotice) => {
                 if (state.editingFoodId) {
                     // 編輯紀錄：先把舊紀錄扣掉的庫存恢復回來（含舊的保養品部分），再依新內容重新扣除
                     const oldRecord = state.foodRecords.find(r => r.id === state.editingFoodId);
@@ -1538,11 +1567,11 @@
                         ? { ...r, ...newRecord }
                         : r
                     );
-                    showToast("紀錄已更新" + careNotice + scheduleNotice, !!scheduleNotice);
+                    showToast("紀錄已更新" + (careNotice || ''));
                 } else {
                     // 新增紀錄
                     state.foodRecords.unshift({ id: Date.now(), ...newRecord });
-                    showToast("已新增紀錄" + careNotice + scheduleNotice, !!scheduleNotice);
+                    showToast("已新增紀錄" + (careNotice || ''));
                 }
                 // 依飲食紀錄消耗庫存：濕糧固定扣 1 罐（不論克數），其他類型依品牌+類型+單位加總扣除；
                 // 若這筆濕糧紀錄有附加保養品，保養品庫存也會一併扣除
@@ -1550,7 +1579,22 @@
 
                 state.showAddFood = false;
                 state.editingFoodId = null;
+                state.pendingFoodRecord = null;
+                state.pendingCareScheduleBrand = null;
                 render();
+            },
+            // 新增：保養品排程確認彈窗 - 選「返回填寫」關閉彈窗、留在表單上讓使用者補記錄
+            cancelCareScheduleConfirm: () => {
+                playClickSound();
+                state.pendingFoodRecord = null;
+                state.pendingCareScheduleBrand = null;
+                render();
+            },
+            // 新增：保養品排程確認彈窗 - 選「直接儲存」則照原本內容存檔，不補記錄保養品
+            confirmCareScheduleProceed: () => {
+                playClickSound();
+                const record = state.pendingFoodRecord;
+                if (record) App.commitFoodRecord(record, '');
             },
             deleteFoodRecord: (id) => {
                 playClickSound();
@@ -1687,6 +1731,8 @@
                 showAddPocketItem: false,
                 activePocketItemId: null,
                 tempPocketImage: '',
+                pendingFoodRecord: null,
+                pendingCareScheduleBrand: null,
                 confirmDeleteAction: null,
                     foodRankDetail: null,
                 foodHistoryTypeFilter: '全部',
@@ -1786,6 +1832,8 @@
                 showAddPocketItem: false,
                 activePocketItemId: null,
                 tempPocketImage: '',
+                pendingFoodRecord: null,
+                pendingCareScheduleBrand: null,
                 confirmDeleteAction: null,
                     foodRankDetail: null,
                 foodHistoryTypeFilter: '全部',
@@ -2687,10 +2735,13 @@
                                     <label class="text-[10px] text-gray-400 font-semibold block mb-1">數量</label>
                                     <div class="flex gap-2">
                                         <input id="care-amount" type="number" value="${fData.careAmount || ''}" placeholder="1" class="flex-1 min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white" />
-                                        <div id="care-unit-container" class="w-16 flex-shrink-0">
+                                        <div id="care-unit-container" class="w-16 flex-shrink-0">${careInventoryUnitsForBrand.length === 0 ? `
+                                            <select id="care-unit" disabled class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-gray-100 text-gray-400">
+                                                <option value="">先選品牌</option>
+                                            </select>` : `
                                             <select id="care-unit" class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white">
                                                 ${unitOptionsHtml(fData.careUnit, careInventoryUnitsForBrand)}
-                                            </select>
+                                            </select>`}
                                         </div>
                                     </div>
                                 </div>
@@ -3382,6 +3433,32 @@
             </div>`;
         };
 
+        // 新增：新增/編輯濕糧紀錄時，若當天保養品排程沒有對到，先跳出這個確認彈窗，讓使用者選擇回去補記錄或直接儲存
+        const renderConfirmCareScheduleModal = () => {
+            const modal = document.getElementById('confirm-care-schedule-modal');
+            if (!modal) return;
+            if (!state.pendingFoodRecord) {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+                return;
+            }
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+
+            modal.innerHTML = `
+            <div class="bg-white rounded-[28px] p-6 w-[90%] max-w-xs mx-auto shadow-2xl text-center">
+                <div class="w-14 h-14 rounded-full bg-purple-50 text-purple-500 flex items-center justify-center mx-auto mb-4">
+                    <i data-lucide="pill" class="w-7 h-7"></i>
+                </div>
+                <h2 class="text-base font-black text-gray-800 mb-1">還沒記錄今天的保養品</h2>
+                <p class="text-sm text-gray-500 mb-4">今天排程要餵「${escapeHtml(state.pendingCareScheduleBrand)}」，這筆濕糧紀錄還沒有一併記錄，確定要直接儲存嗎？</p>
+                <div class="flex gap-3">
+                    <button onclick="App.cancelCareScheduleConfirm()" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-500 font-bold py-3 rounded-xl text-sm transition-colors">返回填寫</button>
+                    <button onclick="App.confirmCareScheduleProceed()" class="flex-1 bg-purple-500 hover:bg-purple-600 text-white font-bold py-3 rounded-xl text-sm transition-colors shadow-md">直接儲存</button>
+                </div>
+            </div>`;
+        };
+
         // 新增：待買清單勾選項目時的「是否確認購買」確認彈窗，確認後才會移出清單並計入庫存
         const renderConfirmPurchaseModal = () => {
             const modal = document.getElementById('confirm-purchase-modal');
@@ -3521,6 +3598,7 @@
                 renderBackupModal();
                 renderFoodRankDetailModal();
                 renderConfirmPurchaseModal();
+                renderConfirmCareScheduleModal();
                 renderConfirmDeleteModal();
 
                 if (typeof lucide !== 'undefined') {
