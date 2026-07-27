@@ -92,7 +92,7 @@
         // ==========================================
 
         // 每次發版打 git tag 時，這裡也同步手動更新，設定頁最下方會顯示，方便肉眼確認目前是哪一版
-        const APP_VERSION = 'v2.6';
+        const APP_VERSION = 'v2.7';
 
         const initialLifeSettings = [
             { id: 'weight', label: '體重記錄', icon: 'scale', enabled:  true, autoReminder: true, remindDays: 30, baseDate: '' },
@@ -213,6 +213,25 @@
             const options = (list && list.length) ? list : FOOD_UNITS;
             const sel = options.includes(selected) ? selected : options[0];
             return options.map(u => `<option value="${u}" ${sel === u ? 'selected' : ''}>${u}</option>`).join('');
+        };
+
+        // 新增：飲食紀錄卡片上顯示這筆濕糧紀錄附加的保養品（可能好幾筆），相容舊格式的單一 careBrand 欄位
+        const renderCareItemsBadges = (r) => {
+            const items = Array.isArray(r.careItems) ? r.careItems : (r.careBrand ? [{ brand: r.careBrand, content: r.careContent, amount: r.careAmount, unit: r.careUnit }] : []);
+            return items.map(it => `<div class="mt-1.5 flex items-center gap-1.5 text-xs text-purple-600 font-semibold bg-purple-50 rounded-lg px-2.5 py-1.5"><i data-lucide="pill" class="w-3.5 h-3.5 flex-shrink-0"></i><span class="truncate">${escapeHtml(it.brand)}${it.content ? ' • ' + escapeHtml(it.content) : ''}${it.amount ? ` (${it.amount}${it.unit || '克'})` : ''}</span></div>`).join('');
+        };
+
+        // 新增：濕糧紀錄「同時記錄保養品」子表單裡，已新增的保養品清單，以可個別移除的標籤呈現
+        const renderCareItemsChips = (items) => {
+            if (!items || items.length === 0) return `<span class="text-xs text-gray-400">尚未新增保養品</span>`;
+            return items.map((it, idx) => `
+                <span class="inline-flex items-center gap-1.5 bg-white border border-purple-200 rounded-full pl-3 pr-1.5 py-1 text-xs font-semibold text-purple-600 max-w-full">
+                    <span class="truncate">${escapeHtml(it.brand)}${it.content ? ' • ' + escapeHtml(it.content) : ''}${it.amount ? ` (${it.amount}${it.unit || ''})` : ''}</span>
+                    <button type="button" onclick="App.removeCareItem(${idx})" class="w-4 h-4 rounded-full bg-purple-50 hover:bg-red-100 text-purple-400 hover:text-red-500 flex items-center justify-center flex-shrink-0 transition-colors">
+                        <i data-lucide="x" class="w-2.5 h-2.5"></i>
+                    </button>
+                </span>
+            `).join('');
         };
 
         const calculateAge = (birthday) => {
@@ -965,7 +984,13 @@
                 } else {
                     App.adjustInventory(record.brand, record.type, record.unit || '克', sign * (record.amount || 0));
                 }
-                // 濕糧紀錄若有合併記錄保養品，保養品庫存也要一併增減
+                // 濕糧紀錄若有合併記錄好幾筆保養品，每一筆的庫存都要一併增減
+                if (Array.isArray(record.careItems)) {
+                    record.careItems.forEach(it => {
+                        if (it.brand) App.adjustInventory(it.brand, '保養品', it.unit || '克', sign * (it.amount || 0));
+                    });
+                }
+                // 相容舊格式（單一 careBrand 欄位）
                 if (record.careBrand) {
                     App.adjustInventory(record.careBrand, '保養品', record.careUnit || '克', sign * (record.careAmount || 0));
                 }
@@ -1296,7 +1321,8 @@
                         type: '濕糧', brand: '', content: '', amount: '', unit: '克', water: '',
                         date: d.toISOString().split('T')[0],
                         time: d.toTimeString().slice(0, 5),
-                        rating: 0
+                        rating: 0,
+                        careItems: []
                     };
                 }
                 state.showAddFood = !state.showAddFood;
@@ -1308,6 +1334,10 @@
                 if (record) {
                     state.editingFoodId = id;
                     state.tempFoodForm = { ...record };
+                    // 相容舊格式（單一 careBrand 欄位）：編輯時先轉成 careItems 陣列，才能繼續用「新增保養品」加更多筆
+                    if (!Array.isArray(state.tempFoodForm.careItems) && state.tempFoodForm.careBrand) {
+                        state.tempFoodForm.careItems = [{ brand: state.tempFoodForm.careBrand, content: state.tempFoodForm.careContent, amount: state.tempFoodForm.careAmount, unit: state.tempFoodForm.careUnit }];
+                    }
                     state.showAddFood = true;
                     state.activeTab = 'food'; // 新增：若從首頁排行榜或排行榜明細彈窗點擊編輯，自動切換到飲食頁籤
                     state.foodRankDetail = null; // 新增：編輯時自動關閉排行榜明細彈窗，避免畫面重疊
@@ -1435,30 +1465,63 @@
                     }
                 }
             },
-            // 新增：切換「順便記錄的保養品」品牌時，單位選單只列出該品牌在庫存裡實際存在的單位
+            // 新增：切換「順便記錄的保養品」小表單的品牌時，單位選單只列出該品牌在庫存裡實際存在的單位
             // 選品牌前不預設顯示「克」，避免誤以為克數才是主要單位；選了品牌才會顯示庫存實際對應的單位
             handleCareBrandChange: (brand) => {
-                if (state.tempFoodForm) state.tempFoodForm.careBrand = brand;
                 const container = document.getElementById('care-unit-container');
                 if (!container) return;
-                const units = (state.inventory || []).filter(i => i.type === '保養品' && i.brand === brand).map(i => i.unit || '克');
+                const units = brand ? (state.inventory || []).filter(i => i.type === '保養品' && i.brand === brand).map(i => i.unit || '克') : [];
                 if (units.length === 0) {
                     container.innerHTML = `
                         <select id="care-unit" disabled class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-gray-100 text-gray-400">
                             <option value="">先選品牌</option>
                         </select>
                     `;
-                    if (state.tempFoodForm) state.tempFoodForm.careUnit = '';
                     return;
                 }
-                const existingSelect = document.getElementById('care-unit');
-                const currentValue = existingSelect ? existingSelect.value : '';
-                const sel = units.includes(currentValue) ? currentValue : units[0];
                 container.innerHTML = `
                     <select id="care-unit" class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white">
-                        ${units.map(u => `<option value="${u}" ${sel === u ? 'selected' : ''}>${u}</option>`).join('')}
+                        ${units.map(u => `<option value="${u}">${u}</option>`).join('')}
                     </select>
                 `;
+            },
+            // 新增：把小表單目前填的保養品加進這筆濕糧紀錄的保養品清單，加完清空小表單讓使用者可以繼續新增下一筆
+            addCareItem: () => {
+                playClickSound();
+                const brandEl = document.getElementById('care-brand');
+                const contentEl = document.getElementById('care-content');
+                const amountEl = document.getElementById('care-amount');
+                const unitEl = document.getElementById('care-unit');
+                const brand = brandEl ? brandEl.value : '';
+                if (!brand) { showToast('請選擇保養品品牌', true); return; }
+                const content = (contentEl ? contentEl.value.trim() : '') || '未填寫品項';
+                const amount = amountEl ? (parseFloat(amountEl.value) || 0) : 0;
+                const unit = unitEl ? unitEl.value : '';
+                if (!state.tempFoodForm) return;
+                if (!Array.isArray(state.tempFoodForm.careItems)) state.tempFoodForm.careItems = [];
+                state.tempFoodForm.careItems.push({ brand, content, amount, unit });
+                App.addFoodHistoryEntry('保養品', brand, content);
+                // 清空小表單，準備繼續新增下一筆
+                if (brandEl) brandEl.value = '';
+                if (contentEl) contentEl.value = '';
+                if (amountEl) amountEl.value = '';
+                App.handleCareBrandChange('');
+                App.refreshCareItemsList();
+            },
+            // 新增：移除這筆濕糧紀錄裡已新增的其中一筆保養品
+            removeCareItem: (idx) => {
+                playClickSound();
+                if (state.tempFoodForm && Array.isArray(state.tempFoodForm.careItems)) {
+                    state.tempFoodForm.careItems.splice(idx, 1);
+                }
+                App.refreshCareItemsList();
+            },
+            refreshCareItemsList: () => {
+                const container = document.getElementById('care-items-list');
+                if (!container) return;
+                const items = (state.tempFoodForm && state.tempFoodForm.careItems) || [];
+                container.innerHTML = renderCareItemsChips(items);
+                if (typeof lucide !== 'undefined') lucide.createIcons({ root: container });
             },
             // ===== 保養品排程（首頁「近期飲食」下方，依星期幾固定要餵的保養品，每天可設多筆、可重複同品牌）=====
             // 統一把某一天的排程正規化成陣列，相容舊資料（曾經是單一字串或未設定）
@@ -1523,32 +1586,19 @@
 
                 const newRecord = { type, brand, content, amount, unit, water, date, time, rating, note };
 
-                // 新增/編輯濕糧紀錄時，若有勾選「同時記錄保養品」且已選好品牌，
-                // 保養品資訊直接附加在同一筆濕糧紀錄上（不再另外新增一筆紀錄），畫面上會合併顯示成同一張卡片
+                // 新增/編輯濕糧紀錄時，若有勾選「同時記錄保養品」，把目前已加進清單的每一筆保養品都附加在
+                // 同一筆濕糧紀錄上（不再另外新增紀錄），畫面上會合併顯示成同一張卡片
                 let careNotice = '';
                 if (type === '濕糧') {
                     const careFields = document.getElementById('also-care-fields');
                     const careFieldsVisible = careFields && !careFields.classList.contains('hidden');
-                    if (careFieldsVisible) {
-                        const careBrandEl = document.getElementById('care-brand');
-                        const careBrand = careBrandEl ? careBrandEl.value : '';
-                        if (careBrand) {
-                            const careContentEl = document.getElementById('care-content');
-                            newRecord.careBrand = careBrand;
-                            newRecord.careContent = (careContentEl ? careContentEl.value.trim() : '') || '未填寫品項';
-                            newRecord.careAmount = parseFloat(document.getElementById('care-amount').value) || 0;
-                            const careUnitEl = document.getElementById('care-unit');
-                            newRecord.careUnit = careUnitEl ? careUnitEl.value : '克';
-                            App.addFoodHistoryEntry('保養品', careBrand, newRecord.careContent);
-                            careNotice = '，並合併記錄保養品';
-                        } else {
-                            careNotice = '（保養品未選擇品牌，未一併記錄）';
-                        }
+                    const careItems = (careFieldsVisible && state.tempFoodForm && Array.isArray(state.tempFoodForm.careItems)) ? state.tempFoodForm.careItems : [];
+                    newRecord.careItems = careItems;
+                    if (careFieldsVisible && careItems.length > 0) {
+                        careNotice = '，並合併記錄保養品';
                     }
-                }
-                // 若這次沒有勾選/沒有選品牌，確保不會殘留上一次編輯時附加的保養品欄位
-                if (!newRecord.careBrand) {
-                    newRecord.careBrand = ''; newRecord.careContent = ''; newRecord.careAmount = 0; newRecord.careUnit = '';
+                } else {
+                    newRecord.careItems = [];
                 }
 
                 // 依「保養品排程」檢查：這筆濕糧紀錄的日期是星期幾，若當天排程的品牌（可能好幾筆、含重複同品牌）
@@ -1563,10 +1613,11 @@
                         state.foodRecords.forEach(r => {
                             if (r.id === state.editingFoodId) return;
                             if (r.date !== date) return;
-                            if (r.careBrand) recordedCounts[r.careBrand] = (recordedCounts[r.careBrand] || 0) + 1;
+                            if (Array.isArray(r.careItems)) r.careItems.forEach(it => { if (it.brand) recordedCounts[it.brand] = (recordedCounts[it.brand] || 0) + 1; });
+                            if (r.careBrand) recordedCounts[r.careBrand] = (recordedCounts[r.careBrand] || 0) + 1; // 相容舊格式
                             if (r.type === '保養品' && r.brand) recordedCounts[r.brand] = (recordedCounts[r.brand] || 0) + 1;
                         });
-                        if (newRecord.careBrand) recordedCounts[newRecord.careBrand] = (recordedCounts[newRecord.careBrand] || 0) + 1;
+                        newRecord.careItems.forEach(it => { if (it.brand) recordedCounts[it.brand] = (recordedCounts[it.brand] || 0) + 1; });
 
                         // 統計當天排程各品牌各需要幾次，找出還沒滿足次數的品牌
                         const neededCounts = scheduledList.reduce((acc, b) => { acc[b] = (acc[b] || 0) + 1; return acc; }, {});
@@ -2682,11 +2733,13 @@
                 const inventoryBrands = inventoryList.filter(i => i.type === currentFoodType).map(i => i.brand);
                 // 單位下拉選單只列出「目前品牌+類型」在庫存裡實際存在的單位
                 const inventoryUnitsForBrand = inventoryList.filter(i => i.type === currentFoodType && i.brand === fData.brand).map(i => i.unit || '克');
-                // 新增濕糧紀錄時，可「順便」一起記錄一筆保養品，品牌一樣只列庫存裡有的
+                // 新增濕糧紀錄時，可「順便」一起記錄好幾筆保養品，品牌一樣只列庫存裡有的
                 const careInventoryBrands = inventoryList.filter(i => i.type === '保養品').map(i => i.brand);
-                const careInventoryUnitsForBrand = inventoryList.filter(i => i.type === '保養品' && i.brand === fData.careBrand).map(i => i.unit || '克');
-                // 編輯已合併保養品的濕糧紀錄時，開關預設要是打開的（fData.alsoCare 沒明確設定過才用 careBrand 判斷）
-                const alsoCareInitial = fData.alsoCare !== undefined ? !!fData.alsoCare : !!fData.careBrand;
+                // 相容舊格式（單一 careBrand 欄位）：沒有 careItems 陣列但有舊欄位時，轉成陣列顯示
+                const careItemsList = Array.isArray(fData.careItems) ? fData.careItems :
+                    (fData.careBrand ? [{ brand: fData.careBrand, content: fData.careContent, amount: fData.careAmount, unit: fData.careUnit }] : []);
+                // 編輯已合併保養品的濕糧紀錄時，開關預設要是打開的
+                const alsoCareInitial = fData.alsoCare !== undefined ? !!fData.alsoCare : careItemsList.length > 0;
                 html += `
                 <div id="food-form-section" class="bg-white rounded-3xl p-6 shadow-lg border border-blue-50 space-y-5 fade-in">
                     <h3 class="font-bold text-gray-800 text-base flex items-center gap-1.5"><i data-lucide="utensils" class="w-5 h-5 text-blue-500"></i> ${state.editingFoodId ? '編輯餐點紀錄' : '新增餐點紀錄 / 記錄水分'}</h3>
@@ -2748,7 +2801,7 @@
                             </div>
                         </div>
 
-                        <!-- 新增濕糧紀錄時，可順便一起記錄一筆保養品，不用另外開一次表單 -->
+                        <!-- 新增濕糧紀錄時，可順便一起記錄好幾筆保養品，不用另外開一次表單 -->
                         <div id="food-also-care-section" class="${fData.type === '濕糧' ? '' : 'hidden'}">
                             <button type="button" onclick="App.toggleAlsoCare()" class="w-full flex items-center justify-between p-3 rounded-xl border border-purple-100 bg-purple-50/50 active:scale-[0.98] transition-transform">
                                 <span class="text-xs font-bold text-purple-600 flex items-center gap-1.5"><i data-lucide="pill" class="w-3.5 h-3.5"></i> 同時記錄保養品</span>
@@ -2757,6 +2810,9 @@
                                 </span>
                             </button>
                             <div id="also-care-fields" class="${alsoCareInitial ? '' : 'hidden'} mt-3 space-y-3 p-3 bg-purple-50/30 rounded-xl border border-purple-100">
+                                <div id="care-items-list" class="flex flex-wrap gap-1.5">
+                                    ${renderCareItemsChips(careItemsList)}
+                                </div>
                                 <div class="grid grid-cols-2 gap-3">
                                     <div>
                                         <label class="text-[10px] text-gray-400 font-semibold block mb-1">保養品品牌</label>
@@ -2765,29 +2821,27 @@
                                             <option value="">尚無庫存品牌</option>
                                         </select>` : `
                                         <select id="care-brand" onchange="App.handleCareBrandChange(this.value)" class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white">
-                                            <option value="" ${!fData.careBrand ? 'selected' : ''} disabled>請選擇品牌</option>
-                                            ${careInventoryBrands.map(b => `<option value="${escapeAttr(b)}" ${fData.careBrand === b ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('')}
+                                            <option value="" selected disabled>請選擇品牌</option>
+                                            ${careInventoryBrands.map(b => `<option value="${escapeAttr(b)}">${escapeHtml(b)}</option>`).join('')}
                                         </select>`}
                                     </div>
                                     <div>
                                         <label class="text-[10px] text-gray-400 font-semibold block mb-1">品項名稱</label>
-                                        <input id="care-content" type="text" value="${escapeHtml(fData.careContent || '')}" placeholder="例：關節保健粉" class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white" />
+                                        <input id="care-content" type="text" placeholder="例：關節保健粉" class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white" />
                                     </div>
                                 </div>
                                 <div>
                                     <label class="text-[10px] text-gray-400 font-semibold block mb-1">數量</label>
                                     <div class="flex gap-2">
-                                        <input id="care-amount" type="number" value="${fData.careAmount || ''}" placeholder="1" class="flex-1 min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white" />
-                                        <div id="care-unit-container" class="w-16 flex-shrink-0">${careInventoryUnitsForBrand.length === 0 ? `
+                                        <input id="care-amount" type="number" placeholder="1" class="flex-1 min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white" />
+                                        <div id="care-unit-container" class="w-16 flex-shrink-0">
                                             <select id="care-unit" disabled class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-gray-100 text-gray-400">
                                                 <option value="">先選品牌</option>
-                                            </select>` : `
-                                            <select id="care-unit" class="w-full min-w-0 text-xs p-2.5 rounded-xl border border-gray-200 bg-white">
-                                                ${unitOptionsHtml(fData.careUnit, careInventoryUnitsForBrand)}
-                                            </select>`}
+                                            </select>
                                         </div>
                                     </div>
                                 </div>
+                                <button type="button" onclick="App.addCareItem()" class="w-full bg-purple-500 hover:bg-purple-600 text-white py-2 rounded-xl text-xs font-bold transition-colors">新增保養品</button>
                             </div>
                         </div>
                     </div>
@@ -2890,7 +2944,7 @@
                                     ${r.type !== '飲水' && r.rating > 0 ? `<div class="mt-1">${generateStarsHTML(r.rating, 12)}</div>` : ''}
                                     <p class="text-xs text-gray-400 mt-1">${r.type} ${r.type!=='飲水'?`• ${r.amount}${r.unit || '克'}`:''} ${r.water>0?`• 加水 ${r.water}ml`:''}</p>
                                     <p class="text-[10px] text-gray-300 mt-1">${r.date} ${r.time}</p>
-                                    ${r.careBrand ? `<div class="mt-1.5 flex items-center gap-1.5 text-xs text-purple-600 font-semibold bg-purple-50 rounded-lg px-2.5 py-1.5"><i data-lucide="pill" class="w-3.5 h-3.5 flex-shrink-0"></i><span class="truncate">${escapeHtml(r.careBrand)} • ${escapeHtml(r.careContent)}${r.careAmount ? ` (${r.careAmount}${r.careUnit || '克'})` : ''}</span></div>` : ''}
+                                    ${renderCareItemsBadges(r)}
                                     ${r.note ? `<p class="text-xs text-gray-500 mt-1.5 bg-gray-50 rounded-lg px-2.5 py-1.5 flex items-start gap-1.5"><i data-lucide="file-text" class="w-3 h-3 text-gray-300 mt-0.5 flex-shrink-0"></i><span class="break-words">${escapeHtml(r.note)}</span></p>` : ''}
                                 </div>
                                 <div class="flex flex-col gap-1 flex-shrink-0">
@@ -3589,7 +3643,7 @@
                             ${r.type !== '飲水' && r.rating > 0 ? `<div class="mb-1">${generateStarsHTML(r.rating, 12)}</div>` : ''}
                             <p class="text-xs text-gray-400">${r.type} ${r.type!=='飲水'?`• ${r.amount}${r.unit || '克'}`:''} ${r.water>0?`• 加水 ${r.water}ml`:''}</p>
                             <p class="text-[10px] text-gray-300 mt-1">${r.date} ${r.time || ''}</p>
-                            ${r.careBrand ? `<div class="mt-1.5 flex items-center gap-1.5 text-xs text-purple-600 font-semibold bg-purple-50 rounded-lg px-2.5 py-1.5"><i data-lucide="pill" class="w-3.5 h-3.5 flex-shrink-0"></i><span class="truncate">${escapeHtml(r.careBrand)} • ${escapeHtml(r.careContent)}${r.careAmount ? ` (${r.careAmount}${r.careUnit || '克'})` : ''}</span></div>` : ''}
+                            ${renderCareItemsBadges(r)}
                             ${r.note ? `<p class="text-xs text-gray-500 mt-1.5 bg-white rounded-lg px-2.5 py-1.5 flex items-start gap-1.5"><i data-lucide="file-text" class="w-3 h-3 text-gray-300 mt-0.5 flex-shrink-0"></i><span class="break-words">${escapeHtml(r.note)}</span></p>` : ''}
                         </div>
                         <div class="flex flex-col gap-1 flex-shrink-0">
