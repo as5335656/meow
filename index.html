@@ -161,6 +161,8 @@
             editingFoodId: null, // 新增：目前正在編輯的紀錄 ID
             tempFoodForm: null,  // 新增：暫存表單資料
             foodRankingFilter: '全部',
+            foodRankingRatingFilter: null, // 新增：排行榜依星等篩選（1~5），null 代表不篩選星等
+            homeFoodRankingRatingFilter: null, // 新增：首頁「本月飲食排行」卡片依星等篩選（1~5），null 代表不篩選星等
             foodRankDetail: null, // 新增：點擊排行榜項目時，記錄 { name, type, monthStr } 以顯示該項目的詳細紀錄彈窗
             foodSelectedMonth: '', // 新增：飲食歷史紀錄目前檢視的月份 (格式 YYYY-MM，空字串代表預設為當月)
             foodHistoryTypeFilter: '全部', // 新增：點擊乾糧/濕糧/點心攝取量卡片時，篩選下方歷史紀錄；預設不篩選
@@ -402,7 +404,8 @@
             `;
         };
 
-        const getMonthlyFoodRanking = (filterType = '全部', monthStr = null) => {
+        // 新增：filterRating 可傳 1~5 篩選「平均評分落在該星等區間（N星以上、不到N+1星）」的品項，null/0 代表不篩選
+        const getMonthlyFoodRanking = (filterType = '全部', monthStr = null, filterRating = null) => {
             const d = new Date();
             const currentMonth = monthStr || `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
             if (!Array.isArray(state.foodRecords)) return [];
@@ -421,11 +424,16 @@
                 }
                 return acc;
             }, {});
-            
-            return Object.values(aggregated).map(item => {
+
+            let list = Object.values(aggregated).map(item => {
                 item.avgRating = item.ratingCount > 0 ? (item.totalRating / item.ratingCount) : 0;
                 return item;
-            }).sort((a, b) => b.avgRating !== a.avgRating ? b.avgRating - a.avgRating : b.totalAmount - a.totalAmount).slice(0, 5);
+            }).sort((a, b) => b.avgRating !== a.avgRating ? b.avgRating - a.avgRating : b.totalAmount - a.totalAmount);
+
+            if (filterRating) {
+                list = list.filter(item => item.avgRating >= filterRating && item.avgRating < filterRating + 1);
+            }
+            return list;
         };
 
         // 新增：取得飲食歷史紀錄中，所有出現過的「年月」選項（供下拉選單使用），並確保一定包含當月，由新到舊排序
@@ -898,10 +906,22 @@
                 state.foodRankingFilter = filter;
                 render();
             },
-            // 新增：點擊排行榜中的某個項目，開啟該項目在當月的詳細紀錄彈窗
-            showFoodRankDetail: (idx, monthStr, filterType) => {
+            // 新增：點擊星等篩選（5★~1★），再點一次同一個星等則清除篩選
+            setFoodRatingFilter: (rating) => {
                 playClickSound();
-                const topFoods = getMonthlyFoodRanking(filterType, monthStr);
+                state.foodRankingRatingFilter = (state.foodRankingRatingFilter === rating) ? null : rating;
+                render();
+            },
+            // 新增：首頁「本月飲食排行」卡片的星等篩選（5★~1★），再點一次同一個星等則清除篩選
+            setHomeFoodRatingFilter: (rating) => {
+                playClickSound();
+                state.homeFoodRankingRatingFilter = (state.homeFoodRankingRatingFilter === rating) ? null : rating;
+                render();
+            },
+            // 新增：點擊排行榜中的某個項目，開啟該項目在當月的詳細紀錄彈窗
+            showFoodRankDetail: (idx, monthStr, filterType, filterRating) => {
+                playClickSound();
+                const topFoods = getMonthlyFoodRanking(filterType, monthStr, filterRating || null);
                 const food = topFoods[idx];
                 if (!food) return;
                 state.foodRankDetail = { name: food.name, type: food.type, monthStr };
@@ -2174,7 +2194,7 @@
         const renderHome = () => {
             const remindersList = getDynamicReminders();
             const homeCurrentMonth = new Date().toISOString().slice(0, 7); // 新增：供排行榜項目點擊查看明細時使用
-            const topFoods = getMonthlyFoodRanking('全部', homeCurrentMonth);
+            const topFoods = getMonthlyFoodRanking('全部', homeCurrentMonth, state.homeFoodRankingRatingFilter).slice(0, 5);
 
             let html = `
             <div class="p-4 space-y-6 fade-in">
@@ -2405,13 +2425,20 @@
             if(state.homeLayout.dietRanking) {
                 html += `
                 <div class="bg-white rounded-3xl p-6 shadow-sm border border-blue-50">
-                    <div class="flex justify-between items-center mb-4">
+                    <div class="flex justify-between items-center mb-3">
                         <h3 class="font-bold text-gray-800 text-lg flex items-center gap-2"><i data-lucide="trophy" class="w-5 h-5 text-yellow-500"></i> 本月飲食排行</h3>
                     </div>
+                    <div class="flex gap-2 overflow-x-auto no-scrollbar pb-1 mb-3">
+                        ${[5, 4, 3, 2, 1].map(star => `
+                            <button onclick="App.setHomeFoodRatingFilter(${star})" class="${state.homeFoodRankingRatingFilter === star ? 'bg-yellow-400 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'} px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-colors flex items-center gap-1">
+                                <i data-lucide="star" class="w-3 h-3 ${state.homeFoodRankingRatingFilter === star ? 'fill-white' : 'fill-gray-400'}"></i> ${star}
+                            </button>
+                        `).join('')}
+                    </div>
                     <div class="space-y-3">
-                        ${topFoods.length === 0 ? '<p class="text-gray-400 text-sm text-center py-4">本月無飲食數據 🥫</p>' : 
+                        ${topFoods.length === 0 ? '<p class="text-gray-400 text-sm text-center py-4">本月無飲食數據 🥫</p>' :
                           topFoods.map((food, idx) => `
-                            <div onclick="App.showFoodRankDetail(${idx}, '${homeCurrentMonth}', '全部')" class="flex items-center gap-3 cursor-pointer active:scale-[0.98] hover:bg-gray-50 rounded-2xl transition-all p-1 -m-1">
+                            <div onclick="App.showFoodRankDetail(${idx}, '${homeCurrentMonth}', '全部', ${state.homeFoodRankingRatingFilter || 'null'})" class="flex items-center gap-3 cursor-pointer active:scale-[0.98] hover:bg-gray-50 rounded-2xl transition-all p-1 -m-1">
                                 <span class="w-6 text-center font-black text-base ${idx===0?'text-yellow-500':idx===1?'text-gray-400':idx===2?'text-amber-600':'text-gray-300'}">${idx+1}</span>
                                 <div class="flex-1 min-w-0">
                                     <p class="text-sm font-semibold text-gray-800 truncate">${escapeHtml(food.name)}</p>
@@ -2654,7 +2681,7 @@
             const totalWet = selectedMonthRecords.filter(r=>r.type==='濕糧').reduce((acc, r) => acc + (r.amount || 0), 0);
             const totalSnack = selectedMonthRecords.filter(r=>r.type==='點心').reduce((acc, r) => acc + (r.amount || 0), 0);
             const totalWater = selectedMonthRecords.reduce((acc, r) => acc + (r.water || 0), 0);
-            const topFoods = getMonthlyFoodRanking(state.foodRankingFilter, selectedMonth);
+            const topFoods = getMonthlyFoodRanking(state.foodRankingFilter, selectedMonth, state.foodRankingRatingFilter);
 
             // HTML escape 工具（供品牌/品項自動完成選項使用）
             const escapeAttr = (s) => String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;');
@@ -2894,11 +2921,18 @@
                                 </button>
                             `).join('')}
                         </div>
+                        <div class="flex gap-2 overflow-x-auto no-scrollbar pb-1 mt-2">
+                            ${[5, 4, 3, 2, 1].map(star => `
+                                <button onclick="App.setFoodRatingFilter(${star})" class="${state.foodRankingRatingFilter === star ? 'bg-yellow-400 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'} px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-colors flex items-center gap-1">
+                                    <i data-lucide="star" class="w-3 h-3 ${state.foodRankingRatingFilter === star ? 'fill-white' : 'fill-gray-400'}"></i> ${star}
+                                </button>
+                            `).join('')}
+                        </div>
                     </div>
-                    <div class="space-y-3">
-                        ${topFoods.length === 0 ? `<p class="text-gray-400 text-sm text-center py-4">${monthLabel} 無此類數據 🥫</p>` : 
+                    <div class="space-y-3 max-h-[19rem] overflow-y-auto pr-1">
+                        ${topFoods.length === 0 ? `<p class="text-gray-400 text-sm text-center py-4">${monthLabel} 無此類數據 🥫</p>` :
                           topFoods.map((food, idx) => `
-                            <div onclick="App.showFoodRankDetail(${idx}, '${selectedMonth}', '${state.foodRankingFilter}')" class="flex items-center gap-3 bg-gray-50/50 p-3 rounded-2xl border border-gray-50 cursor-pointer active:scale-[0.98] hover:bg-gray-100/60 transition-all">
+                            <div onclick="App.showFoodRankDetail(${idx}, '${selectedMonth}', '${state.foodRankingFilter}', ${state.foodRankingRatingFilter || 'null'})" class="flex items-center gap-3 bg-gray-50/50 p-3 rounded-2xl border border-gray-50 cursor-pointer active:scale-[0.98] hover:bg-gray-100/60 transition-all">
                                 <span class="w-8 text-center font-black text-lg ${idx===0?'text-yellow-500':idx===1?'text-gray-400':idx===2?'text-amber-600':'text-gray-300'}">${idx+1}</span>
                                 <div class="flex-1 min-w-0">
                                     <p class="text-sm font-bold text-gray-800 truncate">${escapeHtml(food.name)}</p>
