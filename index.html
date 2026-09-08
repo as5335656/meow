@@ -78,6 +78,7 @@
         <div id="confirm-purchase-modal" class="fixed inset-0 bg-black/40 z-50 hidden items-center justify-center fade-in p-4"></div>
         <div id="confirm-delete-modal" class="fixed inset-0 bg-black/40 z-50 hidden items-center justify-center fade-in p-4"></div>
         <div id="confirm-care-schedule-modal" class="fixed inset-0 bg-black/40 z-50 hidden items-center justify-center fade-in p-4"></div>
+        <div id="low-stock-alert-modal" class="fixed inset-0 bg-black/40 z-50 hidden items-center justify-center fade-in p-4"></div>
 
         <!-- Toast 通知 -->
         <div id="toast" class="fixed top-10 left-1/2 transform -translate-x-1/2 px-4 py-2 rounded-full text-sm shadow-xl z-[100] transition-all duration-300 opacity-0 pointer-events-none -translate-y-5 flex items-center gap-2"></div>
@@ -166,6 +167,8 @@
             foodRankDetail: null, // 新增：點擊排行榜項目時，記錄 { name, type, monthStr } 以顯示該項目的詳細紀錄彈窗
             foodSelectedMonth: '', // 新增：飲食歷史紀錄目前檢視的月份 (格式 YYYY-MM，空字串代表預設為當月)
             foodHistoryTypeFilter: '全部', // 新增：點擊乾糧/濕糧/點心攝取量卡片時，篩選下方歷史紀錄；預設不篩選
+            foodHistoryVisibleCount: {}, // 新增：歷史清單中乾糧/濕糧分類各自目前顯示的筆數（預設3筆，可點擊「顯示更多」+10筆）
+            foodSearchQuery: '', // 新增：飲食紀錄搜尋關鍵字（依品牌/品項比對，如輸入 HERO 可篩選出所有品牌/品項含 HERO 的紀錄）
 
             // 新增：保養品排程 —— 依「星期幾」設定固定要餵的保養品品牌（0=日...6=六，對應 JS Date.getDay()），
             // 一直保留到使用者自己更改為止，不是針對特定日期。每天可以設定多筆（含重複同品牌，代表當天要餵好幾包）
@@ -184,6 +187,7 @@
             activeShoppingItemId: null,
             shopViewMode: '待買', // 新增：待買清單頁面切換「待買」/「庫存」/「口袋」檢視
             inventory: [], // 新增：依品牌記錄目前庫存克數，跟待買清單確認購買、飲食紀錄消耗連動
+            lowStockAlert: null, // 新增：新增/編輯飲食紀錄扣完庫存後，若該品牌/類型/單位庫存變成負數，暫存這些項目待彈窗提醒補貨
             confirmPurchaseId: null, // 新增：待買項目按下勾選時，等待使用者確認「是否確認購買」彈窗
             showAddInventory: false, // 新增：庫存頁面新增/設定品牌庫存的表單開關
             editingInventoryEntry: null, // 新增：點擊某個既有品牌庫存列時，帶入表單編輯該筆（品牌+類型）的庫存量
@@ -346,6 +350,106 @@
             return html;
         };
 
+        // 新增：飲食紀錄類型對應的顏色/圖示，供歷史清單與搜尋結果共用
+        const FOOD_TYPE_META = {
+            '乾糧': { bg: 'bg-amber-50', text: 'text-amber-600', icon: 'bone' },
+            '濕糧': { bg: 'bg-blue-50', text: 'text-blue-600', icon: 'fish' },
+            '點心': { bg: 'bg-pink-50', text: 'text-pink-600', icon: 'star' },
+            '保養品': { bg: 'bg-purple-50', text: 'text-purple-600', icon: 'pill' },
+            '飲水': { bg: 'bg-cyan-50', text: 'text-cyan-600', icon: 'droplet' },
+        };
+
+        // 新增：產生單筆飲食紀錄卡片 HTML（歷史清單、搜尋結果共用）
+        const renderFoodRecordCard = (r) => {
+            const meta = FOOD_TYPE_META[r.type] || FOOD_TYPE_META['乾糧'];
+            return `
+            <div class="bg-white p-4 rounded-2xl border border-gray-100 flex items-center gap-3">
+                <div class="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 ${meta.bg} ${meta.text}">
+                    <i data-lucide="${meta.icon}"></i>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <h4 class="font-bold text-gray-800 text-sm truncate">${escapeHtml(r.brand)} • ${escapeHtml(r.content)}</h4>
+                    ${r.type !== '飲水' && r.rating > 0 ? `<div class="mt-1">${generateStarsHTML(r.rating, 12)}</div>` : ''}
+                    <p class="text-xs text-gray-400 mt-1">${r.type} ${r.type!=='飲水'?`• ${r.amount}${r.unit || '克'}`:''} ${r.water>0?`• 加水 ${r.water}ml`:''}</p>
+                    <p class="text-[10px] text-gray-300 mt-1">${r.date} ${r.time}</p>
+                    ${renderCareItemsBadges(r)}
+                    ${r.note ? `<p class="text-xs text-gray-500 mt-1.5 bg-gray-50 rounded-lg px-2.5 py-1.5 flex items-start gap-1.5"><i data-lucide="file-text" class="w-3 h-3 text-gray-300 mt-0.5 flex-shrink-0"></i><span class="break-words">${escapeHtml(r.note)}</span></p>` : ''}
+                </div>
+                <div class="flex flex-col gap-1 flex-shrink-0">
+                    <button onclick="App.editFoodRecord(${r.id})" class="text-blue-400 hover:text-blue-500 p-1.5 rounded-full hover:bg-blue-50 transition-colors flex items-center justify-center">
+                        <i data-lucide="edit-2" class="w-4 h-4"></i>
+                    </button>
+                    <button onclick="App.requestDelete('確定要刪除「${escapeJsAttr(r.brand)} • ${escapeJsAttr(r.content)}」這筆飲食紀錄嗎？', () => App.deleteFoodRecord(${r.id}))" class="text-red-400 hover:text-red-500 p-1.5 rounded-full hover:bg-red-50 transition-colors flex items-center justify-center">
+                        <i data-lucide="trash-2" class="w-4 h-4"></i>
+                    </button>
+                </div>
+            </div>`;
+        };
+
+        // 新增：計算飲食紀錄目前檢視的月份與其顯示字樣（供直接更新 DOM 的搜尋輸入事件使用，不用整頁重繪）
+        const getFoodSelectedMonthInfo = () => {
+            const currentMonth = new Date().toISOString().split('T')[0].slice(0, 7);
+            const selectedMonth = state.foodSelectedMonth || currentMonth;
+            const [selYear, selMonthNum] = selectedMonth.split('-');
+            const monthLabel = `${selYear}年${parseInt(selMonthNum, 10)}月`;
+            return [selectedMonth, monthLabel];
+        };
+
+        // 新增：依「檢視月份 + 類型篩選 + 搜尋關鍵字」計算歷史清單要顯示的分組資料
+        // 乾糧/濕糧各自預設只顯示前3筆，點擊「顯示更多」每次增加10筆；保養品併入「濕糧」一起顯示
+        const computeFoodHistoryGroups = (selectedMonth) => {
+            const selectedMonthRecords = state.foodRecords.filter(r => r.date && r.date.startsWith(selectedMonth));
+            const foodHistoryTypeFilter = state.foodHistoryTypeFilter || '全部';
+            const query = (state.foodSearchQuery || '').trim().toLowerCase();
+            const matchesQuery = (r) => !query ||
+                (r.brand && r.brand.toLowerCase().includes(query)) ||
+                (r.content && r.content.toLowerCase().includes(query));
+            return ['乾糧', '濕糧', '點心', '飲水']
+                .filter(t => foodHistoryTypeFilter === '全部' || t === foodHistoryTypeFilter)
+                .map(t => {
+                    const records = selectedMonthRecords.filter(r => (r.type === t || (t === '濕糧' && r.type === '保養品')) && matchesQuery(r));
+                    const isPaginated = t === '乾糧' || t === '濕糧';
+                    const visibleCount = isPaginated ? (state.foodHistoryVisibleCount[t] || 3) : records.length;
+                    return {
+                        type: t,
+                        meta: FOOD_TYPE_META[t],
+                        records,
+                        visibleRecords: records.slice(0, visibleCount),
+                        remaining: records.length - Math.min(visibleCount, records.length)
+                    };
+                })
+                .filter(g => g.records.length > 0);
+        };
+
+        // 新增：產生歷史清單本體 HTML（分組卡片 + 顯示更多按鈕），供初次渲染與即時搜尋共用
+        const renderFoodHistoryBodyHTML = (selectedMonth, monthLabel) => {
+            const selectedMonthRecords = state.foodRecords.filter(r => r.date && r.date.startsWith(selectedMonth));
+            if (selectedMonthRecords.length === 0) {
+                return `<p class="text-gray-400 text-sm text-center py-8 bg-white rounded-3xl border border-gray-100">${monthLabel} 尚無飲食紀錄</p>`;
+            }
+            const groupedFoodHistory = computeFoodHistoryGroups(selectedMonth);
+            if (groupedFoodHistory.length === 0) {
+                const query = state.foodSearchQuery || '';
+                const foodHistoryTypeFilter = state.foodHistoryTypeFilter || '全部';
+                const reason = query.trim()
+                    ? `找不到品牌或品項含「${escapeHtml(query)}」的紀錄`
+                    : `本月無「${foodHistoryTypeFilter}」紀錄，點一次上方卡片可清除篩選`;
+                return `<p class="text-gray-400 text-sm text-center py-8 bg-white rounded-3xl border border-gray-100">${reason}</p>`;
+            }
+            return groupedFoodHistory.map(group => `
+                <div class="space-y-2 fade-in">
+                    <div class="flex items-center px-1 pt-1">
+                        <span class="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full ${group.meta.bg} ${group.meta.text}">
+                            <i data-lucide="${group.meta.icon}" class="w-3.5 h-3.5"></i> ${group.type}
+                            <span class="opacity-60 font-semibold">・${group.records.length} 筆</span>
+                        </span>
+                    </div>
+                    ${group.visibleRecords.map(r => renderFoodRecordCard(r)).join('')}
+                    ${group.remaining > 0 ? `<button onclick="App.showMoreFoodHistory('${group.type}')" class="w-full text-blue-500 text-xs font-bold py-2.5 rounded-full bg-blue-50 hover:bg-blue-100 transition-colors active:scale-95">顯示更多（還有 ${group.remaining} 筆）</button>` : ''}
+                </div>
+            `).join('');
+        };
+
         // 確保「依飲食類型分類的常用清單」結構完整，並相容沒有此欄位的舊資料 (改由既有飲食紀錄反推建立)
         const normalizeFoodInputHistory = (historyData, recordsForFallback) => {
             const base = { '乾糧': { brands: [], contents: [] }, '濕糧': { brands: [], contents: [] }, '點心': { brands: [], contents: [] }, '保養品': { brands: [], contents: [] } };
@@ -497,8 +601,11 @@
                 pendingFoodRecord: null,
                 pendingCareScheduleBrand: null,
                 confirmDeleteAction: null,
+                lowStockAlert: null,
                 foodRankDetail: null,
                 foodHistoryTypeFilter: '全部',
+                foodHistoryVisibleCount: {},
+                foodSearchQuery: '',
                 editingLifeRecordId: null,
                 tempLifePhoto: ''
             };
@@ -605,6 +712,12 @@
                 state.confirmDeleteAction = null;
                 if (info && typeof info.action === 'function') info.action();
             },
+            // 新增：關閉「庫存不足」提醒彈窗（新增/編輯飲食紀錄扣完庫存後若變成負數才會跳出）
+            closeLowStockAlert: () => {
+                playClickSound();
+                state.lowStockAlert = null;
+                render();
+            },
             setTab: (tab) => {
                 playClickSound();
                 state.activeTab = tab;
@@ -613,6 +726,8 @@
                 state.editingLifeRecordId = null;
                 state.tempLifePhoto = '';
                 state.foodHistoryTypeFilter = '全部'; // 每次切換頁籤都重置，避免上次篩選被記住
+                state.foodSearchQuery = ''; // 每次切換頁籤都清空搜尋關鍵字
+                state.foodHistoryVisibleCount = {};
                 state.showAddFood = false; // 每次切換頁籤都關閉新增/編輯餐點表單，避免卡在上次編輯的紀錄
                 state.editingFoodId = null;
                 state.tempFoodForm = null;
@@ -937,12 +1052,39 @@
             setFoodMonth: (monthStr) => {
                 playClickSound();
                 state.foodSelectedMonth = monthStr;
+                state.foodHistoryVisibleCount = {};
                 render();
             },
             // 新增：點擊乾糧/濕糧/點心攝取量卡片，篩選下方歷史紀錄；再點一次同一個類型則清除篩選
             setFoodHistoryTypeFilter: (type) => {
                 playClickSound();
                 state.foodHistoryTypeFilter = (state.foodHistoryTypeFilter === type) ? '全部' : type;
+                state.foodHistoryVisibleCount = {};
+                render();
+            },
+            // 新增：歷史清單中乾糧/濕糧分類點擊「顯示更多」，每次多顯示10筆
+            showMoreFoodHistory: (type) => {
+                playClickSound();
+                state.foodHistoryVisibleCount[type] = (state.foodHistoryVisibleCount[type] || 3) + 10;
+                render();
+            },
+            // 新增：飲食紀錄搜尋框輸入時即時篩選下方歷史清單（僅局部更新清單區塊，避免整頁重繪導致輸入焦點被中斷）
+            onFoodSearchInput: (val) => {
+                state.foodSearchQuery = val;
+                state.foodHistoryVisibleCount = {};
+                const clearBtn = document.getElementById('food-search-clear-btn');
+                if (clearBtn) clearBtn.classList.toggle('hidden', !val);
+                const container = document.getElementById('food-history-body');
+                if (container) {
+                    container.innerHTML = renderFoodHistoryBodyHTML(...getFoodSelectedMonthInfo());
+                    if (typeof lucide !== 'undefined') lucide.createIcons({root: container});
+                }
+            },
+            // 新增：清除飲食紀錄搜尋關鍵字
+            clearFoodSearch: () => {
+                playClickSound();
+                state.foodSearchQuery = '';
+                state.foodHistoryVisibleCount = {};
                 render();
             },
             // ===== 待買清單 =====
@@ -980,40 +1122,53 @@
                 render();
             },
             // 新增：庫存依「品牌 + 乾糧/濕糧/點心/保養品類型 + 單位」為單位記錄，增減庫存數量（該組合不存在時自動新增一筆）
+            // 回傳異動後的該筆庫存物件，供呼叫端判斷異動後是否變成負數（庫存不足）
             adjustInventory: (brand, type, unit, delta) => {
                 const b = (brand || '').trim();
                 const u = unit || '克';
-                if (!b || !delta || !type) return;
+                if (!b || !delta || !type) return null;
                 if (!Array.isArray(state.inventory)) state.inventory = [];
                 const entry = state.inventory.find(i => i.brand === b && i.type === type && (i.unit || '克') === u);
                 if (entry) {
                     entry.amount = (entry.amount || 0) + delta;
+                    return entry;
                 } else {
-                    state.inventory.push({ brand: b, type, unit: u, amount: delta });
+                    const newEntry = { brand: b, type, unit: u, amount: delta };
+                    state.inventory.push(newEntry);
+                    return newEntry;
                 }
             },
             // 新增：飲食紀錄對庫存的增減統一由這裡處理 —— 濕糧特殊規則：紀錄本身仍以克數記錄餵食量，
             // 但庫存固定以「整包裝」為單位（罐/包/個，依該品牌實際庫存用的單位而定，不會是克）、
             // 每筆紀錄固定增減 1 個該單位，不論克數多少（其他類型則照品牌+類型+單位正常增減）
+            // 回傳這次異動實際碰到的庫存項目清單，供呼叫端檢查扣除後是否變成負數
             adjustInventoryForFoodRecord: (record, sign) => {
-                if (!record || record.type === '飲水') return;
+                if (!record || record.type === '飲水') return [];
+                const touched = [];
                 if (record.type === '濕糧') {
                     // 找出這個品牌的濕糧庫存實際登記的是罐/包/個哪一種，沒有既有庫存時才用「罐」當預設
                     const existing = (state.inventory || []).find(i => i.brand === record.brand && i.type === '濕糧' && ['罐', '包', '個'].includes(i.unit));
-                    App.adjustInventory(record.brand, '濕糧', existing ? existing.unit : '罐', sign * 1);
+                    const entry = App.adjustInventory(record.brand, '濕糧', existing ? existing.unit : '罐', sign * 1);
+                    if (entry) touched.push(entry);
                 } else {
-                    App.adjustInventory(record.brand, record.type, record.unit || '克', sign * (record.amount || 0));
+                    const entry = App.adjustInventory(record.brand, record.type, record.unit || '克', sign * (record.amount || 0));
+                    if (entry) touched.push(entry);
                 }
                 // 濕糧紀錄若有合併記錄好幾筆保養品，每一筆的庫存都要一併增減
                 if (Array.isArray(record.careItems)) {
                     record.careItems.forEach(it => {
-                        if (it.brand) App.adjustInventory(it.brand, '保養品', it.unit || '克', sign * (it.amount || 0));
+                        if (it.brand) {
+                            const entry = App.adjustInventory(it.brand, '保養品', it.unit || '克', sign * (it.amount || 0));
+                            if (entry) touched.push(entry);
+                        }
                     });
                 }
                 // 相容舊格式（單一 careBrand 欄位）
                 if (record.careBrand) {
-                    App.adjustInventory(record.careBrand, '保養品', record.careUnit || '克', sign * (record.careAmount || 0));
+                    const entry = App.adjustInventory(record.careBrand, '保養品', record.careUnit || '克', sign * (record.careAmount || 0));
+                    if (entry) touched.push(entry);
                 }
+                return touched;
             },
             // 新增：點擊待買項目的勾選鈕，先跳出「是否確認購買」彈窗，而非直接勾選
             requestConfirmPurchase: (id) => {
@@ -1676,12 +1831,18 @@
                 }
                 // 依飲食紀錄消耗庫存：濕糧固定扣 1 罐（不論克數），其他類型依品牌+類型+單位加總扣除；
                 // 若這筆濕糧紀錄有附加保養品，保養品庫存也會一併扣除
-                App.adjustInventoryForFoodRecord(newRecord, -1);
+                const touchedEntries = App.adjustInventoryForFoodRecord(newRecord, -1);
 
                 state.showAddFood = false;
                 state.editingFoodId = null;
                 state.pendingFoodRecord = null;
                 state.pendingCareScheduleBrand = null;
+
+                // 新增：扣完庫存後，若剛剛異動到的品項庫存變成負數，代表已經吃超過庫存，跳出彈窗提醒需要補貨
+                const lowStock = touchedEntries.filter(e => (e.amount || 0) < 0);
+                if (lowStock.length > 0) {
+                    state.lowStockAlert = lowStock.map(e => ({ brand: e.brand, type: e.type, unit: e.unit, amount: e.amount }));
+                }
                 render();
             },
             // 新增：保養品排程確認彈窗 - 選「返回填寫」關閉彈窗、留在表單上讓使用者補記錄
@@ -1835,8 +1996,11 @@
                 pendingFoodRecord: null,
                 pendingCareScheduleBrand: null,
                 confirmDeleteAction: null,
+                lowStockAlert: null,
                     foodRankDetail: null,
                 foodHistoryTypeFilter: '全部',
+                foodHistoryVisibleCount: {},
+                foodSearchQuery: '',
                     editingLifeRecordId: null,
                     tempLifePhoto: '',
                     photoPickTarget: 'profile',
@@ -1936,8 +2100,11 @@
                 pendingFoodRecord: null,
                 pendingCareScheduleBrand: null,
                 confirmDeleteAction: null,
+                lowStockAlert: null,
                     foodRankDetail: null,
                 foodHistoryTypeFilter: '全部',
+                foodHistoryVisibleCount: {},
+                foodSearchQuery: '',
                     editingLifeRecordId: null,
                     tempLifePhoto: '',
                     photoPickTarget: 'profile',
@@ -2661,21 +2828,7 @@
             const foodMonthOptions = getFoodMonthOptions();
 
             const selectedMonthRecords = state.foodRecords.filter(r => r.date && r.date.startsWith(selectedMonth));
-
-            // 新增：歷史紀錄展開明細時，依「乾糧/濕糧/點心/飲水」分類分組顯示（各分類內仍保留原本的先後順序）
-            // 保養品不獨立成一組，紀錄時併入「濕糧」一起顯示（每筆紀錄仍依自己的類型顯示對應的圖示/顏色）
-            const foodHistoryTypeMeta = {
-                '乾糧': { bg: 'bg-amber-50', text: 'text-amber-600', icon: 'bone' },
-                '濕糧': { bg: 'bg-blue-50', text: 'text-blue-600', icon: 'fish' },
-                '點心': { bg: 'bg-pink-50', text: 'text-pink-600', icon: 'star' },
-                '保養品': { bg: 'bg-purple-50', text: 'text-purple-600', icon: 'pill' },
-                '飲水': { bg: 'bg-cyan-50', text: 'text-cyan-600', icon: 'droplet' },
-            };
             const foodHistoryTypeFilter = state.foodHistoryTypeFilter || '全部';
-            const groupedFoodHistory = ['乾糧', '濕糧', '點心', '飲水']
-                .filter(t => foodHistoryTypeFilter === '全部' || t === foodHistoryTypeFilter)
-                .map(t => ({ type: t, meta: foodHistoryTypeMeta[t], records: selectedMonthRecords.filter(r => r.type === t || (t === '濕糧' && r.type === '保養品')) }))
-                .filter(g => g.records.length > 0);
 
             const totalDry = selectedMonthRecords.filter(r=>r.type==='乾糧').reduce((acc, r) => acc + (r.amount || 0), 0);
             const totalWet = selectedMonthRecords.filter(r=>r.type==='濕糧').reduce((acc, r) => acc + (r.amount || 0), 0);
@@ -2953,42 +3106,14 @@
             if (state.foodLayout.history) {
                 html += `
                 <div class="space-y-3 transition-all">
-                    ${selectedMonthRecords.length === 0 ? `<p class="text-gray-400 text-sm text-center py-8 bg-white rounded-3xl border border-gray-100">${monthLabel} 尚無飲食紀錄</p>` : groupedFoodHistory.length === 0 ? `<p class="text-gray-400 text-sm text-center py-8 bg-white rounded-3xl border border-gray-100">本月無「${foodHistoryTypeFilter}」紀錄，點一次上方卡片可清除篩選</p>` : `
-
-                    ${groupedFoodHistory.map(group => `
-                        <div class="space-y-2 fade-in">
-                            <div class="flex items-center px-1 pt-1">
-                                <span class="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full ${group.meta.bg} ${group.meta.text}">
-                                    <i data-lucide="${group.meta.icon}" class="w-3.5 h-3.5"></i> ${group.type}
-                                    <span class="opacity-60 font-semibold">・${group.records.length} 筆</span>
-                                </span>
-                            </div>
-                            ${group.records.map(r => { const rMeta = foodHistoryTypeMeta[r.type] || group.meta; return `
-                            <div class="bg-white p-4 rounded-2xl border border-gray-100 flex items-center gap-3">
-                                <div class="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 ${rMeta.bg} ${rMeta.text}">
-                                    <i data-lucide="${rMeta.icon}"></i>
-                                </div>
-                                <div class="flex-1 min-w-0">
-                                    <h4 class="font-bold text-gray-800 text-sm truncate">${escapeHtml(r.brand)} • ${escapeHtml(r.content)}</h4>
-                                    ${r.type !== '飲水' && r.rating > 0 ? `<div class="mt-1">${generateStarsHTML(r.rating, 12)}</div>` : ''}
-                                    <p class="text-xs text-gray-400 mt-1">${r.type} ${r.type!=='飲水'?`• ${r.amount}${r.unit || '克'}`:''} ${r.water>0?`• 加水 ${r.water}ml`:''}</p>
-                                    <p class="text-[10px] text-gray-300 mt-1">${r.date} ${r.time}</p>
-                                    ${renderCareItemsBadges(r)}
-                                    ${r.note ? `<p class="text-xs text-gray-500 mt-1.5 bg-gray-50 rounded-lg px-2.5 py-1.5 flex items-start gap-1.5"><i data-lucide="file-text" class="w-3 h-3 text-gray-300 mt-0.5 flex-shrink-0"></i><span class="break-words">${escapeHtml(r.note)}</span></p>` : ''}
-                                </div>
-                                <div class="flex flex-col gap-1 flex-shrink-0">
-                                    <button onclick="App.editFoodRecord(${r.id})" class="text-blue-400 hover:text-blue-500 p-1.5 rounded-full hover:bg-blue-50 transition-colors flex items-center justify-center">
-                                        <i data-lucide="edit-2" class="w-4 h-4"></i>
-                                    </button>
-                                    <button onclick="App.requestDelete('確定要刪除「${escapeJsAttr(r.brand)} • ${escapeJsAttr(r.content)}」這筆飲食紀錄嗎？', () => App.deleteFoodRecord(${r.id}))" class="text-red-400 hover:text-red-500 p-1.5 rounded-full hover:bg-red-50 transition-colors flex items-center justify-center">
-                                        <i data-lucide="trash-2" class="w-4 h-4"></i>
-                                    </button>
-                                </div>
-                            </div>
-                            `; }).join('')}
+                    <div class="bg-white rounded-2xl p-3 shadow-sm border border-gray-100 flex items-center gap-2.5">
+                        <div class="w-9 h-9 rounded-xl bg-gray-50 text-gray-400 flex items-center justify-center flex-shrink-0">
+                            <i data-lucide="search" class="w-4 h-4"></i>
                         </div>
-                    `).join('')}
-                    `}
+                        <input id="food-search-input" type="text" value="${escapeAttr(state.foodSearchQuery || '')}" oninput="App.onFoodSearchInput(this.value)" placeholder="搜尋罐頭品牌 / 品項，如 HERO" class="flex-1 text-sm font-medium text-gray-800 bg-transparent outline-none min-w-0" />
+                        <button id="food-search-clear-btn" onclick="App.clearFoodSearch()" class="w-6 h-6 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-400 flex items-center justify-center flex-shrink-0 ${state.foodSearchQuery ? '' : 'hidden'}"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>
+                    </div>
+                    <div id="food-history-body" class="space-y-3">${renderFoodHistoryBodyHTML(selectedMonth, monthLabel)}</div>
                 </div>`;
             }
 
@@ -3559,6 +3684,40 @@
             </div>`;
         };
 
+        // 新增：新增/編輯飲食紀錄扣完庫存後，若剛剛異動到的品項庫存變成負數，跳出這個彈窗提醒需要補貨
+        const renderLowStockAlertModal = () => {
+            const modal = document.getElementById('low-stock-alert-modal');
+            if (!modal) return;
+            const items = state.lowStockAlert;
+            if (!items || items.length === 0) {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+                return;
+            }
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+
+            modal.innerHTML = `
+            <div class="bg-white rounded-[28px] p-6 w-[90%] max-w-xs mx-auto shadow-2xl text-center">
+                <div class="w-14 h-14 rounded-full bg-red-50 text-red-500 flex items-center justify-center mx-auto mb-4">
+                    <i data-lucide="package-x" class="w-7 h-7"></i>
+                </div>
+                <h2 class="text-base font-black text-gray-800 mb-1">庫存已不足，需要補貨</h2>
+                <p class="text-sm text-gray-500 mb-4">這筆紀錄扣完後，以下品項的庫存變成負數：</p>
+                <div class="space-y-2 mb-5 text-left">
+                    ${items.map(it => `
+                        <div class="bg-red-50 border border-red-100 rounded-2xl px-4 py-3 flex items-center justify-between gap-2">
+                            <div class="min-w-0">
+                                <p class="text-sm font-bold text-gray-800 truncate">${escapeHtml(it.brand)} <span class="text-xs font-semibold text-gray-400">・${it.type}</span></p>
+                            </div>
+                            <span class="text-sm font-black text-red-500 flex-shrink-0">${it.amount}${it.unit || '克'}</span>
+                        </div>
+                    `).join('')}
+                </div>
+                <button onclick="App.closeLowStockAlert()" class="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-3 rounded-xl text-sm transition-colors shadow-md">我知道了</button>
+            </div>`;
+        };
+
         // 新增：新增/編輯濕糧紀錄時，若當天保養品排程沒有對到，先跳出這個確認彈窗，讓使用者選擇回去補記錄或直接儲存
         const renderConfirmCareScheduleModal = () => {
             const modal = document.getElementById('confirm-care-schedule-modal');
@@ -3726,6 +3885,7 @@
                 renderConfirmPurchaseModal();
                 renderConfirmCareScheduleModal();
                 renderConfirmDeleteModal();
+                renderLowStockAlertModal();
 
                 if (typeof lucide !== 'undefined') {
                     lucide.createIcons();
